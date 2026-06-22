@@ -11,6 +11,9 @@ uint8_t  net_mac[6];
 uint32_t net_ip   = 0x0202000A; /* 10.0.2.2 host → guest is 10.0.2.15 */
 
 static struct netdev *nd;
+static int arp_cache_valid;
+static uint32_t arp_cache_ip;
+static uint8_t arp_cache_mac[6];
 
 static void dbg(const char *s) { serial_puts("[net] "); serial_puts(s); }
 
@@ -53,6 +56,11 @@ static uint16_t ip_checksum(const void *data, size_t len) {
 
 /* --- ARP --- */
 static int arp_resolve(uint32_t ip, uint8_t *mac_out) {
+    if (arp_cache_valid && arp_cache_ip == ip) {
+        memcpy(mac_out, arp_cache_mac, 6);
+        return 0;
+    }
+
     uint8_t pkt[42];
     struct eth_frame *eth = (struct eth_frame *)pkt;
     struct arp_pkt   *arp = (struct arp_pkt *)eth->payload;
@@ -73,18 +81,24 @@ static int arp_resolve(uint32_t ip, uint8_t *mac_out) {
 
     nd->send(nd, pkt, sizeof(pkt));
     dbg("arp sent, waiting reply\n");
+    for (int tries = 0; tries < 50; tries++) {
         uint8_t rbuf[64];
         size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
+        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
         if (n >= 42) {
             struct eth_frame *re = (struct eth_frame *)rbuf;
             if (bswap16(re->ethertype) == 0x0806) {
                 struct arp_pkt *ra = (struct arp_pkt *)re->payload;
                 if (bswap16(ra->oper) == 2 && ra->spa == ip) {
                     memcpy(mac_out, ra->sha, 6);
+                    memcpy(arp_cache_mac, ra->sha, 6);
+                    arp_cache_ip = ip;
+                    arp_cache_valid = 1;
                     return 0;
                 }
             }
         }
+    }
     dbg("arp resolve timeout\n");
     return -1;
 }
@@ -92,11 +106,15 @@ static int arp_resolve(uint32_t ip, uint8_t *mac_out) {
 /* --- IP send --- */
 static int ip_send(uint32_t dst_ip, uint8_t proto, const void *data, size_t len) {
     uint8_t dst_mac[6];
-    /* Route through gateway (10.0.2.2) for non-local destinations */
-    uint32_t arp_ip = dst_ip;
-    if ((dst_ip & 0x00FFFFFF) != (net_ip & 0x00FFFFFF))
-        arp_ip = 0x0202000A; /* QEMU user-mode gateway */
-    if (arp_resolve(arp_ip, dst_mac) < 0) return -1;
+    if (dst_ip == 0xFFFFFFFFu) {
+        memset(dst_mac, 0xFF, 6);
+    } else {
+        /* Route through gateway (10.0.2.2) for non-local destinations */
+        uint32_t arp_ip = dst_ip;
+        if ((dst_ip & 0x00FFFFFF) != (net_ip & 0x00FFFFFF))
+            arp_ip = 0x0202000A; /* QEMU user-mode gateway */
+        if (arp_resolve(arp_ip, dst_mac) < 0) return -1;
+    }
 
     uint8_t buf[1514];
     struct eth_frame *eth = (struct eth_frame *)buf;
@@ -170,6 +188,56 @@ int net_ping(uint32_t ip) {
     return -1;
 }
 
+int net_icmp_send_echo(uint32_t dst_ip, uint16_t id, uint16_t seq,
+                       const void *data, size_t len) {
+    if (len > 1200)
+        len = 1200;
+    uint8_t pkt[sizeof(struct icmp_echo) + 1200];
+    struct icmp_echo *echo = (struct icmp_echo *)pkt;
+    memset(echo, 0, sizeof(*echo) + len);
+    echo->type = 8;
+    echo->code = 0;
+    echo->id = bswap16(id);
+    echo->seq = bswap16(seq);
+    memcpy(echo->data, data, len);
+    echo->checksum = ip_checksum(echo, sizeof(*echo) + len);
+    return ip_send(dst_ip, 1, echo, sizeof(*echo) + len);
+}
+
+int net_icmp_recv_echo(uint32_t src_ip, uint16_t id, uint16_t *seq_out,
+                       void *buf, size_t max) {
+    for (int tries = 0; tries < 1000; tries++) {
+        uint8_t rbuf[1514];
+        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
+        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
+        if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct icmp_echo))
+            continue;
+        struct eth_frame *eth = (struct eth_frame *)rbuf;
+        if (bswap16(eth->ethertype) != 0x0800)
+            continue;
+        struct ip_hdr *ip = (struct ip_hdr *)eth->payload;
+        if (ip->protocol != 1)
+            continue;
+        if (src_ip && ip->src_ip != src_ip)
+            continue;
+        uint16_t ip_total = bswap16(ip->total_len);
+        uint8_t ip_hlen = (uint8_t)((ip->ver_ihl & 0x0F) * 4);
+        if (ip_hlen < sizeof(struct ip_hdr) || ip_total < ip_hlen + sizeof(struct icmp_echo))
+            continue;
+        struct icmp_echo *echo = (struct icmp_echo *)((uint8_t *)ip + ip_hlen);
+        if (echo->type != 0 || bswap16(echo->id) != id)
+            continue;
+        size_t plen = ip_total - ip_hlen - sizeof(*echo);
+        if (plen > max)
+            plen = max;
+        memcpy(buf, echo->data, plen);
+        if (seq_out)
+            *seq_out = bswap16(echo->seq);
+        return (int)plen;
+    }
+    return -1;
+}
+
 void net_status(void) {
     serial_puts("[net] MAC=");
     for (int i=0;i<6;i++){serial_puthex(net_mac[i]);serial_putc(':');}
@@ -225,6 +293,49 @@ static int udp_send(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
     udp->checksum = 0;
     memcpy(pkt + sizeof(*udp), data, len);
     return ip_send(dst_ip, 17, pkt, sizeof(*udp) + len);
+}
+
+int net_udp_send(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
+                 const void *data, size_t len) {
+    return udp_send(dst_ip, src_port, dst_port, data, len);
+}
+
+int net_udp_recv(uint16_t local_port, uint32_t *src_ip, uint16_t *src_port,
+                 void *buf, size_t max) {
+    for (int tries = 0; tries < 2000; tries++) {
+        uint8_t rbuf[1514];
+        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
+        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
+        if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct udp_hdr))
+            continue;
+        struct eth_frame *eth = (struct eth_frame *)rbuf;
+        if (bswap16(eth->ethertype) != 0x0800)
+            continue;
+        struct ip_hdr *ip = (struct ip_hdr *)eth->payload;
+        if (ip->protocol != 17)
+            continue;
+        uint8_t ip_hlen = (uint8_t)((ip->ver_ihl & 0x0F) * 4);
+        if (ip_hlen < sizeof(struct ip_hdr))
+            continue;
+        if (n < sizeof(struct eth_frame) + ip_hlen + sizeof(struct udp_hdr))
+            continue;
+        struct udp_hdr *udp = (struct udp_hdr *)((uint8_t *)ip + ip_hlen);
+        if (bswap16(udp->dst_port) != local_port)
+            continue;
+        size_t ulen = bswap16(udp->length);
+        if (ulen < sizeof(*udp))
+            continue;
+        size_t plen = ulen - sizeof(*udp);
+        if (plen > max)
+            plen = max;
+        memcpy(buf, udp + 1, plen);
+        if (src_ip)
+            *src_ip = ip->src_ip;
+        if (src_port)
+            *src_port = bswap16(udp->src_port);
+        return (int)plen;
+    }
+    return -1;
 }
 
 /* ================================================================
@@ -332,11 +443,17 @@ static struct {
     int      state;
 } tcp;
 
+static uint16_t tcp_next_port = 40960;
+static uint32_t tcp_next_seq = 0x12345678;
+
 int net_tcp_connect(uint32_t ip, uint16_t port) {
     tcp.dst_ip   = ip;
     tcp.dst_port = port;
-    tcp.src_port = 40960;
-    tcp.seq      = 0x12345678;
+    tcp.src_port = tcp_next_port++;
+    if (tcp_next_port < 40960 || tcp_next_port > 49151)
+        tcp_next_port = 40960;
+    tcp.seq      = tcp_next_seq;
+    tcp_next_seq += 0x01010101;
     tcp.ack      = 0;
     tcp.state    = 0;
 
@@ -369,7 +486,10 @@ int net_tcp_connect(uint32_t ip, uint16_t port) {
         if (bswap16(re->ethertype) != 0x0800) continue;
         struct ip_hdr *rip = (struct ip_hdr *)re->payload;
         if (rip->protocol != 6) continue;
-        struct tcp_hdr *rth = (struct tcp_hdr *)(rip + 1);
+        uint8_t ip_hlen = (uint8_t)((rip->ver_ihl & 0x0F) * 4);
+        if (ip_hlen < sizeof(struct ip_hdr)) continue;
+        if (n < sizeof(struct eth_frame) + ip_hlen + sizeof(struct tcp_hdr)) continue;
+        struct tcp_hdr *rth = (struct tcp_hdr *)((uint8_t *)rip + ip_hlen);
         if (bswap16(rth->src_port) != tcp.dst_port) continue;
         if (bswap16(rth->dst_port) != tcp.src_port) continue;
         if (!(rth->flags & TCP_SYN) || !(rth->flags & TCP_ACK)) continue;
@@ -422,9 +542,10 @@ int net_tcp_send(const void *data, size_t len) {
 }
 
 int net_tcp_recv(void *buf, size_t max) {
+    if (tcp.state == 0) return 0;
     if (tcp.state != 2) return -1;
 
-    for (int tries = 0; tries < 500; tries++) {
+    for (int tries = 0; tries < 5000; tries++) {
         uint8_t rbuf[1514];
         size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
         if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
@@ -434,60 +555,39 @@ int net_tcp_recv(void *buf, size_t max) {
         if (bswap16(re->ethertype) != 0x0800) continue;
         struct ip_hdr *rip = (struct ip_hdr *)re->payload;
         if (rip->protocol != 6) continue;
-        struct tcp_hdr *rth = (struct tcp_hdr *)(rip + 1);
+        uint16_t ip_total = bswap16(rip->total_len);
+        uint8_t ip_hlen = (uint8_t)((rip->ver_ihl & 0x0F) * 4);
+        if (ip_hlen < sizeof(struct ip_hdr)) continue;
+        if (ip_total < ip_hlen + sizeof(struct tcp_hdr)) continue;
+        if (n < sizeof(struct eth_frame) + ip_total) continue;
+
+        struct tcp_hdr *rth = (struct tcp_hdr *)((uint8_t *)rip + ip_hlen);
         if (bswap16(rth->src_port) != tcp.dst_port) continue;
         if (bswap16(rth->dst_port) != tcp.src_port) continue;
 
         if (rth->flags & TCP_RST) { dbg("tcp: rst\n"); tcp.state = 0; return -1; }
-        if (rth->flags & TCP_FIN) {
-            dbg("tcp: fin received\n");
-            uint32_t peer_seq = bswap32(rth->seq);
-            tcp.ack = peer_seq + 1;
-            /* ACK the FIN */
-            {
-                uint8_t ak[sizeof(struct tcp_hdr)];
-                struct tcp_hdr *ah = (struct tcp_hdr *)ak;
-                memset(ah, 0, sizeof(*ah));
-                ah->src_port = bswap16(tcp.src_port);
-                ah->dst_port = bswap16(tcp.dst_port);
-                ah->seq      = bswap32(tcp.seq);
-                ah->ack      = bswap32(tcp.ack);
-                ah->data_off = (uint8_t)(sizeof(*ah) / 4) << 4;
-                ah->flags    = TCP_ACK;
-                ah->window   = bswap16(1460);
-                ah->checksum = trans_checksum(net_ip, tcp.dst_ip, 6, ah, sizeof(*ah));
-                ip_send(tcp.dst_ip, 6, ah, sizeof(*ah));
-            }
-            /* Send our FIN-ACK */
-            {
-                uint8_t fn[sizeof(struct tcp_hdr)];
-                struct tcp_hdr *fh = (struct tcp_hdr *)fn;
-                memset(fh, 0, sizeof(*fh));
-                fh->src_port = bswap16(tcp.src_port);
-                fh->dst_port = bswap16(tcp.dst_port);
-                fh->seq      = bswap32(tcp.seq);
-                fh->ack      = bswap32(tcp.ack);
-                fh->data_off = (uint8_t)(sizeof(*fh) / 4) << 4;
-                fh->flags    = TCP_FIN | TCP_ACK;
-                fh->window   = bswap16(1460);
-                fh->checksum = trans_checksum(net_ip, tcp.dst_ip, 6, fh, sizeof(*fh));
-                ip_send(tcp.dst_ip, 6, fh, sizeof(*fh));
-            }
-            tcp.state = 0;
-            return 0;
-        }
 
         /* Data packet */
         uint8_t doff  = (rth->data_off >> 4) * 4;
         if (doff < sizeof(struct tcp_hdr)) continue;
         const uint8_t *payload = ((const uint8_t *)rth) + doff;
-        size_t plen = n - sizeof(struct eth_frame) - sizeof(struct ip_hdr) - doff;
-        if (plen == 0) continue;
-        if (plen > max) plen = max;
-        memcpy(buf, payload, plen);
+        size_t tcp_len = (size_t)ip_total - ip_hlen;
+        if (tcp_len < doff) continue;
+        size_t plen = tcp_len - doff;
+        size_t ack_len = plen;
 
         uint32_t peer_seq = bswap32(rth->seq);
-        tcp.ack = peer_seq + (uint32_t)plen;
+        if (plen > 0) {
+            if (plen > max) plen = max;
+            memcpy(buf, payload, plen);
+            tcp.ack = peer_seq + (uint32_t)ack_len;
+            if (rth->flags & TCP_FIN)
+                tcp.ack++;
+        } else if (rth->flags & TCP_FIN) {
+            tcp.ack = peer_seq + 1;
+        } else {
+            continue;
+        }
 
         /* Send ACK */
         {
@@ -507,6 +607,8 @@ int net_tcp_recv(void *buf, size_t max) {
         serial_puts("[tcp] rx data len=");
         serial_puthex((uint32_t)plen);
         serial_puts("\n");
+        if (rth->flags & TCP_FIN)
+            tcp.state = 0;
         return (int)plen;
     }
     dbg("tcp: recv timeout\n");
@@ -566,14 +668,15 @@ int net_wget(const char *host, void (*putc)(char)) {
 
     dbg("wget: receiving...\n");
     char rbuf[2048];
+    int ok = 1;
     for (;;) {
         int n = net_tcp_recv(rbuf, sizeof(rbuf));
-        if (n < 0) { dbg("wget: recv error\n"); break; }
+        if (n < 0) { dbg("wget: recv error\n"); ok = 0; break; }
         if (n == 0) break;
         for (int i = 0; i < n; i++) putc(rbuf[i]);
     }
     net_tcp_close();
-    return 0;
+    return ok ? 0 : -1;
 }
 
 /* ================================================================

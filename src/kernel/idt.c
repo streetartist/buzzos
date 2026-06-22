@@ -40,13 +40,28 @@ static const char *exception_names[32] = {
     "#MF", "#AC", "#MC", "#XM",
 };
 
-void exception_handler(uint32_t vector, uint32_t error) {
-    (void)error;
+void exception_handler(uint32_t vector, uint32_t error, const uint32_t *frame) {
     serial_puts("\n=== EXCEPTION ===\nVector: ");
     serial_puthex(vector);
     serial_puts("\n");
     if (vector < 32 && exception_names[vector])
         serial_puts(exception_names[vector]);
+    serial_puts("\nError: ");
+    serial_puthex(error);
+    if (frame) {
+        serial_puts("\nEIP=");
+        serial_puthex(frame[10]);
+        serial_puts(" CS=");
+        serial_puthex(frame[11]);
+        serial_puts(" EFLAGS=");
+        serial_puthex(frame[12]);
+        serial_puts("\nESP=");
+        serial_puthex(frame[13]);
+        serial_puts(" SS=");
+        serial_puthex(frame[14]);
+        serial_puts(" EAX=");
+        serial_puthex(frame[7]);
+    }
     serial_puts("\nHalted.\n");
     for (;;) { GNU_ASM("hlt"); }
 }

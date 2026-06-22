@@ -1,6 +1,7 @@
 %define KERNEL_FINAL_ADDR 0x1000
 %define KERNEL_HIGH_SEG   0x1000   ; ES segment → physical 0x10000
-%define KERNEL_SECTORS    96       ; up to 48 KiB, safe at 0x10000
+%define KERNEL_SECTORS    256      ; up to 128 KiB, loaded at 0x10000
+%define READ_CHUNK        64
 
 bits 16
 org 0x7c00
@@ -38,13 +39,34 @@ start:
     jne .e820_loop
 .e820_done:
 
-    ; Load kernel via LBA extended read to physical 0x10000 (above bootloader).
-    ; This avoids both the CHS track-boundary limit and the 0x7C00 self-overwrite.
+    ; Load kernel via LBA extended reads to physical 0x10000 (above bootloader).
+    ; Reading in chunks avoids BIOS single-request limits.
+    mov word [sectors_left], KERNEL_SECTORS
+    mov word [load_seg], KERNEL_HIGH_SEG
+    mov word [dap_lba], 1
+.load_loop:
+    mov ax, [sectors_left]
+    test ax, ax
+    jz .load_done
+    cmp ax, READ_CHUNK
+    jbe .load_count_ok
+    mov ax, READ_CHUNK
+.load_count_ok:
+    mov [dap_count], ax
+    mov ax, [load_seg]
+    mov [dap_seg], ax
     mov si, dap
     mov dl, [drive]
     mov ah, 0x42
     int 0x13
     jc .disk_error
+    mov ax, [dap_count]
+    sub [sectors_left], ax
+    add [dap_lba], ax
+    shl ax, 5                  ; sectors * 512 / 16 = paragraphs
+    add [load_seg], ax
+    jmp .load_loop
+.load_done:
 
     ; Enable A20
     in al, 0x92
@@ -75,6 +97,8 @@ print:
     ret
 
 drive       db 0
+sectors_left dw 0
+load_seg    dw 0
 loading_msg db "BuzzOS boot", 13, 10, 0
 err_msg     db "Disk error", 13, 10, 0
 
@@ -83,9 +107,12 @@ align 4
 dap:
     db 0x10                  ; packet size (16 bytes)
     db 0                     ; reserved
-    dw KERNEL_SECTORS        ; number of sectors to read
+dap_count:
+    dw 0                     ; number of sectors to read
     dw 0x0000                ; dest offset  (0x1000:0x0000 = phys 0x10000)
+dap_seg:
     dw KERNEL_HIGH_SEG       ; dest segment
+dap_lba:
     dq 1                     ; starting LBA (boot sector = LBA 0, kernel = LBA 1)
 
 ; GDT: 6 entries (NULL, kcode32, kdata32, ucode32, udata32, TSS)

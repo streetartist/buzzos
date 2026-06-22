@@ -7,15 +7,25 @@
  * task's own kernel stack; the PCB only holds the stack pointer. */
 struct task {
     uint32_t esp;        /* saved stack pointer */
-    uint32_t kstack;     /* top of kernel stack (for cleanup) */
+    uint32_t kstack;     /* allocated kernel stack top */
+    uint32_t esp0;       /* ring3 -> ring0 entry stack pointer */
+    uint32_t cr3;        /* page directory used while this task runs */
+    int      exit_code;
+    int      console_silent;
+    int      fd_owner;
+    int      proc_id;
+    uint32_t wake_tick;
     int      id;         /* task id */
     int      state;      /* 0 = ready, 1 = running, 2 = blocked */
     char     name[16];
+    char     cwd[128];
 };
 
 #define TASK_READY   0
 #define TASK_RUNNING 1
-#define MAX_TASKS    8
+#define TASK_DEAD    2
+#define TASK_SLEEPING 3
+#define MAX_TASKS    32
 
 /* Initialise the scheduler. Creates an idle task from the current
  * execution context. */
@@ -23,6 +33,7 @@ void sched_init(void);
 
 /* Create a new kernel thread starting at `entry`. Returns task id. */
 int task_create(void (*entry)(void), const char *name);
+int task_create_ex(void (*entry)(void), const char *name, int console_silent);
 
 /* Yield the CPU voluntarily. */
 void task_yield(void);
@@ -32,5 +43,26 @@ void sched_tick(void);
 
 /* The currently running task. */
 extern struct task *current_task;
+
+/* Get task state by id. Returns -1 if invalid. */
+int task_get_state(int id);
+int task_get_exit_code(int id);
+int task_forget_dead(int id);
+int task_get_pid(void);
+int task_get_tid(void);
+int task_get_cwd(char *buf, int size);
+int task_set_cwd(const char *path);
+int task_wait_pid(int pid, int *status, int options);
+void task_set_cr3(int id, uint32_t cr3);
+void task_set_console_silent(int id, int silent);
+void task_set_fd_owner(int id, int owner);
+int task_kill(int id);
+void task_dump(void (*putc)(char), int show_dead);
+int task_dump_text(char *buf, int size, int show_dead);
+
+/* Mark a task as dead (used by sys_exit for spawned threads). */
+void task_exit(void);
+void task_exit_code(int code);
+void task_sleep_until(uint32_t wake_tick);
 
 #endif /* BUZZOS_TASK_H */

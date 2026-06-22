@@ -1,110 +1,693 @@
 #include "vfs.h"
+#include "fs/minifs.h"
+#include "keyboard.h"
 #include "serial.h"
+#include "task.h"
 
-/* ------------------------------------------------------------------ */
-/*  Global fd table                                                     */
-/* ------------------------------------------------------------------ */
+#define MAX_FD        32
+#define MAX_DEV       16
+#define FS_MAX_NODES  64
+#define FS_NAME_LEN   24
+#define FS_FILE_BUFSZ 2048
+#define MAX_MOUNTS    8
 
-#define MAX_FD    32
-#define MAX_DEV   16
-#define MAX_RAMFS 16
-
-static vnode_t *fd_table[MAX_FD];
-static int      fd_next = 0;   /* 0,1,2 reserved for stdin/stdout/stderr */
-
-/* ------------------------------------------------------------------ */
-/*  devfs                                                               */
-/* ------------------------------------------------------------------ */
-
-static vnode_t *devfs_nodes[MAX_DEV];
-static int      devfs_count;
-
-void devfs_register(const char *name, const struct vnode_ops *ops,
-                    void *data) {
-    if (devfs_count >= MAX_DEV) return;
-    static vnode_t storage[MAX_DEV];
-    vnode_t *vn = &storage[devfs_count];
-    vn->name = name;
-    vn->ops  = ops;
-    vn->data = data;
-    devfs_nodes[devfs_count] = vn;
-    devfs_count++;
-}
-
-/* ------------------------------------------------------------------ */
-/*  ramfs                                                               */
-/* ------------------------------------------------------------------ */
-
-struct ramfs_file {
-    const char    *name;
-    const uint8_t *data;
-    size_t         size;
+enum node_type {
+    NODE_FREE = 0,
+    NODE_DIR,
+    NODE_FILE,
+    NODE_DEV,
 };
 
-static struct ramfs_file ramfs_files[MAX_RAMFS];
-static int               ramfs_count;
+struct fs_node {
+    int used;
+    enum node_type type;
+    int readonly;
+    char name[FS_NAME_LEN];
+    struct fs_node *parent;
+    struct fs_node *first_child;
+    struct fs_node *next_sibling;
+    const uint8_t *ro_data;
+    uint8_t data[FS_FILE_BUFSZ];
+    size_t size;
+    const struct vnode_ops *dev_ops;
+    void *dev_data;
+};
 
-void ramfs_register(const char *name, const uint8_t *data, size_t size) {
-    if (ramfs_count >= MAX_RAMFS) return;
-    ramfs_files[ramfs_count].name = name;
-    ramfs_files[ramfs_count].data = data;
-    ramfs_files[ramfs_count].size = size;
-    ramfs_count++;
+struct file_stream {
+    struct fs_node *node;
+    size_t pos;
+    uint16_t minifs_ino;
+};
+
+struct open_file {
+    int used;
+    int refs;
+    int flags;
+    vnode_t vnode;
+    struct file_stream stream;
+};
+
+struct vfs_mount {
+    int used;
+    const struct fs_ops *ops;
+    char path[FS_NAME_LEN];
+    int path_len;
+};
+
+struct fs_ops {
+    int (*open)(const char *abs, const char *rel, int flags, struct open_file *of);
+    int (*create)(const char *abs, const char *rel);
+    int (*mkdir)(const char *abs, const char *rel);
+    int (*unlink)(const char *abs, const char *rel);
+    int (*rmdir)(const char *abs, const char *rel);
+    int (*rename)(const char *old_abs, const char *old_rel,
+                  const char *new_abs, const char *new_rel);
+    int (*stat)(const char *abs, const char *rel, struct stat *st);
+    int (*is_dir)(const char *abs, const char *rel);
+    int (*ls)(const char *abs, const char *rel, void (*putc)(char));
+};
+
+static struct fs_node nodes[FS_MAX_NODES];
+static struct fs_node *root_node;
+static struct fs_node *dev_node;
+static struct fs_node *fs_node;
+
+static struct open_file open_files[MAX_TASKS][MAX_FD];
+static int fd_open_file[MAX_TASKS][MAX_FD];
+static int fd_used[MAX_TASKS][MAX_FD];
+static struct vfs_mount mounts[MAX_MOUNTS];
+static volatile int vfs_locked;
+static uint32_t vfs_irq_flags;
+
+static uint32_t irq_save(void) {
+    uint32_t flags;
+    __asm__ volatile("pushf; pop %0; cli" : "=r"(flags) :: "memory");
+    return flags;
 }
 
-static const struct ramfs_file *ramfs_lookup(const char *name) {
-    for (int i = 0; i < ramfs_count; i++) {
-        const char *a = name, *b = ramfs_files[i].name;
-        while (*a && *b && *a == *b) { a++; b++; }
-        if (*a == 0 && *b == 0) return &ramfs_files[i];
+static void irq_restore(uint32_t flags) {
+    __asm__ volatile("push %0; popf" :: "r"(flags) : "memory", "cc");
+}
+
+static void vfs_lock(void) {
+    uint32_t flags = irq_save();
+    while (__sync_lock_test_and_set(&vfs_locked, 1)) {
+        __asm__ volatile("pause");
+    }
+    vfs_irq_flags = flags;
+}
+
+static void vfs_unlock(void) {
+    uint32_t flags = vfs_irq_flags;
+    __sync_lock_release(&vfs_locked);
+    irq_restore(flags);
+}
+
+static int nameeq(const char *name, const char *part, int len) {
+    int i = 0;
+    while (i < len && name[i] && name[i] == part[i]) i++;
+    return i == len && name[i] == 0;
+}
+
+static int normalize_path(const char *in, char *out, int out_sz) {
+    char tmp[128];
+    int n = 0;
+
+    if (!in || !in[0])
+        in = ".";
+    if (in[0] == '/') {
+        tmp[n++] = '/';
+    } else {
+        char cwd[128];
+        if (task_get_cwd(cwd, sizeof(cwd)) < 0)
+            return -1;
+        for (int i = 0; cwd[i] && n < (int)sizeof(tmp) - 1; i++)
+            tmp[n++] = cwd[i];
+        if (n > 1 && tmp[n - 1] != '/' && n < (int)sizeof(tmp) - 1)
+            tmp[n++] = '/';
+    }
+    for (int i = 0; in[i] && n < (int)sizeof(tmp) - 1; i++)
+        tmp[n++] = in[i];
+    tmp[n] = 0;
+
+    int len = 1;
+    out[0] = '/';
+    out[1] = 0;
+
+    const char *p = tmp;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != '/') p++;
+        int part_len = (int)(p - start);
+        if (part_len == 1 && start[0] == '.')
+            continue;
+        if (part_len == 2 && start[0] == '.' && start[1] == '.') {
+            if (len > 1) {
+                if (out[len - 1] == '/') len--;
+                while (len > 1 && out[len - 1] != '/') len--;
+                out[len] = 0;
+            }
+            continue;
+        }
+        if (len > 1 && out[len - 1] != '/') {
+            if (len >= out_sz - 1) return -1;
+            out[len++] = '/';
+        }
+        for (int i = 0; i < part_len; i++) {
+            if (len >= out_sz - 1) return -1;
+            out[len++] = start[i];
+        }
+        out[len] = 0;
+    }
+    if (len > 1 && out[len - 1] == '/')
+        out[len - 1] = 0;
+    return 0;
+}
+
+static void copy_name(char *dst, const char *src, int len) {
+    int i = 0;
+    while (i < len && i < FS_NAME_LEN - 1) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
+static int str_len(const char *s) {
+    int n = 0;
+    while (s && s[n])
+        n++;
+    return n;
+}
+
+static int path_mount_match(const char *path, const char *mount_path, int mount_len) {
+    if (mount_len == 1 && mount_path[0] == '/')
+        return path && path[0] == '/';
+    if (!path || mount_len <= 0)
+        return 0;
+    for (int i = 0; i < mount_len; i++) {
+        if (path[i] != mount_path[i])
+            return 0;
+    }
+    return path[mount_len] == 0 || path[mount_len] == '/';
+}
+
+static struct vfs_mount *find_mount(const char *abs) {
+    struct vfs_mount *best = 0;
+    int best_len = -1;
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (!mounts[i].used)
+            continue;
+        if (path_mount_match(abs, mounts[i].path, mounts[i].path_len) &&
+            mounts[i].path_len > best_len) {
+            best = &mounts[i];
+            best_len = mounts[i].path_len;
+        }
+    }
+    return best;
+}
+
+static const char *mount_relpath(struct vfs_mount *mnt, const char *abs) {
+    if (!mnt)
+        return 0;
+    if (mnt->path_len == 1 && mnt->path[0] == '/')
+        return abs;
+    return abs[mnt->path_len] ? abs + mnt->path_len : "/";
+}
+
+static int add_mount(const char *path, const struct fs_ops *ops) {
+    int len = str_len(path);
+    if (len <= 0 || len >= FS_NAME_LEN || !ops)
+        return -1;
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (mounts[i].used && nameeq(mounts[i].path, path, len))
+            return -1;
+    }
+    for (int i = 0; i < MAX_MOUNTS; i++) {
+        if (!mounts[i].used) {
+            mounts[i].used = 1;
+            mounts[i].ops = ops;
+            mounts[i].path_len = len;
+            copy_name(mounts[i].path, path, len);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static struct fs_node *alloc_node(enum node_type type, const char *name, int len) {
+    for (int i = 0; i < FS_MAX_NODES; i++) {
+        if (!nodes[i].used) {
+            struct fs_node *n = &nodes[i];
+            n->used = 1;
+            n->type = type;
+            n->readonly = 0;
+            n->parent = 0;
+            n->first_child = 0;
+            n->next_sibling = 0;
+            n->ro_data = 0;
+            n->size = 0;
+            n->dev_ops = 0;
+            n->dev_data = 0;
+            copy_name(n->name, name, len);
+            return n;
+        }
     }
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/*  vnode ops for ramfs (read-only stream)                              */
-/* ------------------------------------------------------------------ */
+static void add_child(struct fs_node *parent, struct fs_node *child) {
+    child->parent = parent;
+    child->next_sibling = parent->first_child;
+    parent->first_child = child;
+}
 
-struct ramfs_stream {
-    const uint8_t *base;
-    size_t         size;
-    size_t         pos;
-};
-
-static int ramfs_open(vnode_t *vn) {
+static struct fs_node *find_child(struct fs_node *dir, const char *name, int len) {
+    if (!dir || dir->type != NODE_DIR) return 0;
+    for (struct fs_node *n = dir->first_child; n; n = n->next_sibling) {
+        if (nameeq(n->name, name, len))
+            return n;
+    }
     return 0;
 }
 
-static int ramfs_read(vnode_t *vn, void *buf, size_t count) {
-    struct ramfs_stream *s = (struct ramfs_stream *)vn->data;
-    if (s->pos >= s->size) return 0;
-    size_t n = s->size - s->pos;
-    if (n > count) n = count;
-    for (size_t i = 0; i < n; i++)
-        ((uint8_t *)buf)[i] = s->base[s->pos + i];
-    s->pos += n;
-    return (int)n;
+static struct fs_node *resolve_path(const char *path) {
+    if (!path || path[0] != '/') return 0;
+    struct fs_node *cur = root_node;
+    const char *p = path;
+    while (*p == '/') p++;
+    while (*p) {
+        const char *start = p;
+        while (*p && *p != '/') p++;
+        int len = (int)(p - start);
+        if (len > 0) {
+            cur = find_child(cur, start, len);
+            if (!cur) return 0;
+        }
+        while (*p == '/') p++;
+    }
+    return cur;
 }
 
-static int ramfs_write(vnode_t *vn, const void *buf, size_t count) {
+static struct fs_node *resolve_parent(const char *path, const char **leaf, int *leaf_len) {
+    if (!path || path[0] != '/') return 0;
+    const char *last = 0;
+    const char *p = path;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        last = p;
+        while (*p && *p != '/') p++;
+    }
+    if (!last) return 0;
+
+    *leaf = last;
+    p = last;
+    while (*p && *p != '/') p++;
+    *leaf_len = (int)(p - last);
+
+    struct fs_node *cur = root_node;
+    p = path;
+    while (*p == '/') p++;
+    while (p < last) {
+        const char *start = p;
+        while (*p && *p != '/') p++;
+        int len = (int)(p - start);
+        while (*p == '/') p++;
+        if (p > last) break;
+        if (len > 0) {
+            cur = find_child(cur, start, len);
+            if (!cur || cur->type != NODE_DIR) return 0;
+        }
+    }
+    return cur;
+}
+
+static int unlink_child(struct fs_node *n) {
+    struct fs_node *parent = n->parent;
+    if (!parent) return -1;
+    struct fs_node **pp = &parent->first_child;
+    while (*pp) {
+        if (*pp == n) {
+            *pp = n->next_sibling;
+            n->used = 0;
+            return 0;
+        }
+        pp = &(*pp)->next_sibling;
+    }
+    return -1;
+}
+
+static int detach_child(struct fs_node *n) {
+    struct fs_node *parent = n->parent;
+    if (!parent) return -1;
+    struct fs_node **pp = &parent->first_child;
+    while (*pp) {
+        if (*pp == n) {
+            *pp = n->next_sibling;
+            n->parent = 0;
+            n->next_sibling = 0;
+            return 0;
+        }
+        pp = &(*pp)->next_sibling;
+    }
+    return -1;
+}
+
+static int current_fd_owner(void) {
+    if (!current_task) return 0;
+    if (current_task->id < 0 || current_task->id >= MAX_TASKS) return 0;
+    if (current_task->fd_owner < 0 || current_task->fd_owner >= MAX_TASKS)
+        return current_task->id;
+    return current_task->fd_owner;
+}
+
+static int valid_fd_owner(int owner) {
+    return owner >= 0 && owner < MAX_TASKS;
+}
+
+static int alloc_open_file(int owner);
+static const struct vnode_ops file_ops;
+static const struct vnode_ops dir_ops;
+static const struct vnode_ops minifs_file_ops;
+static const struct vnode_ops minifs_dir_ops;
+static const struct fs_ops ramfs_ops;
+static const struct fs_ops minifs_ops;
+
+static int alloc_fd_slot(int owner) {
+    for (int i = 0; i < MAX_FD; i++) {
+        if (!fd_used[owner][i])
+            return i;
+    }
+    return -1;
+}
+
+static struct vfs_mount *mount_for_path(const char *abs, const char **rel_out) {
+    struct vfs_mount *mnt = find_mount(abs);
+    if (!mnt || !mnt->ops)
+        return 0;
+    if (rel_out)
+        *rel_out = mount_relpath(mnt, abs);
+    return mnt;
+}
+
+static int open_can_read(int flags) {
+    return (flags & 3) != O_WRONLY;
+}
+
+static int open_can_write(int flags) {
+    int mode = flags & 3;
+    return mode == O_WRONLY || mode == O_RDWR;
+}
+
+static struct fs_node *create_file_locked(const char *abs) {
+    const char *leaf;
+    int leaf_len;
+    struct fs_node *parent = resolve_parent(abs, &leaf, &leaf_len);
+    if (!parent || parent->type != NODE_DIR || leaf_len <= 0)
+        return 0;
+    struct fs_node *old = find_child(parent, leaf, leaf_len);
+    if (old)
+        return old->type == NODE_FILE && !old->readonly ? old : 0;
+    struct fs_node *n = alloc_node(NODE_FILE, leaf, leaf_len);
+    if (!n)
+        return 0;
+    add_child(parent, n);
+    return n;
+}
+
+static void init_open_file(struct open_file *of, int flags) {
+    of->used = 1;
+    of->refs = 1;
+    of->flags = flags;
+    of->vnode.name = 0;
+    of->vnode.ops = 0;
+    of->vnode.data = 0;
+    of->stream.node = 0;
+    of->stream.pos = 0;
+    of->stream.minifs_ino = 0;
+}
+
+static int ramfs_fs_open(const char *abs, const char *rel, int flags, struct open_file *of) {
+    (void)rel;
+    struct fs_node *n = resolve_path(abs);
+    if (!n && (flags & O_CREAT))
+        n = create_file_locked(abs);
+    if (!n)
+        return -1;
+    if (n->type == NODE_DIR && open_can_write(flags))
+        return -1;
+    if ((flags & O_TRUNC) && (!open_can_write(flags) || n->type != NODE_FILE || n->readonly))
+        return -1;
+
+    init_open_file(of, flags);
+    of->vnode.name = n->name;
+    if (n->type == NODE_DEV) {
+        of->vnode.ops = n->dev_ops;
+        of->vnode.data = n->dev_data;
+    } else if (n->type == NODE_DIR) {
+        of->stream.node = n;
+        of->vnode.ops = &dir_ops;
+        of->vnode.data = &of->stream;
+    } else {
+        if (flags & O_TRUNC)
+            n->size = 0;
+        of->stream.node = n;
+        of->stream.pos = (flags & O_APPEND) ? n->size : 0;
+        of->vnode.ops = &file_ops;
+        of->vnode.data = &of->stream;
+    }
+    return 0;
+}
+
+static int minifs_fs_open(const char *abs, const char *rel, int flags, struct open_file *of) {
+    (void)abs;
+    if ((flags & O_CREAT) && minifs_create(rel) < 0)
+        return -1;
+    uint16_t ino;
+    if (minifs_open(rel, &ino) < 0)
+        return -1;
+    int is_dir = minifs_is_dir_ino(ino);
+    if (is_dir && open_can_write(flags))
+        return -1;
+    if ((flags & O_TRUNC) && (!open_can_write(flags) || minifs_truncate(rel) < 0))
+        return -1;
+
+    init_open_file(of, flags);
+    of->vnode.name = "minifs";
+    of->vnode.ops = is_dir ? &minifs_dir_ops : &minifs_file_ops;
+    of->stream.minifs_ino = ino;
+    if ((flags & O_APPEND) && !is_dir)
+        minifs_size_ino(ino, &of->stream.pos);
+    of->vnode.data = &of->stream;
+    return 0;
+}
+
+static int open_abs_for_owner(int owner, const char *abs, int flags) {
+    if (!valid_fd_owner(owner))
+        return -1;
+
+    const char *rel;
+    struct vfs_mount *mnt = mount_for_path(abs, &rel);
+    if (!mnt || !mnt->ops->open)
+        return -1;
+
+    int fd = alloc_fd_slot(owner);
+    int of_idx = alloc_open_file(owner);
+    if (fd < 0 || of_idx < 0)
+        return -1;
+
+    struct open_file *of = &open_files[owner][of_idx];
+    if (mnt->ops->open(abs, rel, flags, of) < 0)
+        return -1;
+
+    if (of->vnode.ops && of->vnode.ops->open)
+        of->vnode.ops->open(&of->vnode);
+    fd_used[owner][fd] = 1;
+    fd_open_file[owner][fd] = of_idx;
+    return fd;
+}
+
+static int alloc_open_file(int owner) {
+    for (int i = 0; i < MAX_FD; i++) {
+        if (!open_files[owner][i].used)
+            return i;
+    }
+    return -1;
+}
+
+static struct open_file *fd_to_open_file(int owner, int fd) {
+    if (fd < 0 || fd >= MAX_FD || !fd_used[owner][fd])
+        return 0;
+    int of = fd_open_file[owner][fd];
+    if (of < 0 || of >= MAX_FD || !open_files[owner][of].used)
+        return 0;
+    return &open_files[owner][of];
+}
+
+static int close_fd_locked(int owner, int fd) {
+    struct open_file *of = fd_to_open_file(owner, fd);
+    if (!of)
+        return -1;
+
+    fd_used[owner][fd] = 0;
+    fd_open_file[owner][fd] = -1;
+
+    if (--of->refs > 0)
+        return 0;
+
+    int ret = 0;
+    if (of->vnode.ops && of->vnode.ops->close)
+        ret = of->vnode.ops->close(&of->vnode);
+    of->used = 0;
+    of->refs = 0;
+    of->flags = 0;
+    of->vnode.name = 0;
+    of->vnode.ops = 0;
+    of->vnode.data = 0;
+    of->stream.node = 0;
+    of->stream.pos = 0;
+    of->stream.minifs_ino = 0;
+    return ret;
+}
+
+/* ------------------------------------------------------------------ */
+/*  File vnode ops                                                     */
+/* ------------------------------------------------------------------ */
+
+static uint32_t node_type_to_dirent(enum node_type type);
+static void copy_dirent_name(char *dst, const char *src);
+
+static int file_open(vnode_t *vn) { (void)vn; return 0; }
+static int file_close(vnode_t *vn) { (void)vn; return 0; }
+
+static int file_read(vnode_t *vn, void *buf, size_t count) {
+    struct file_stream *s = (struct file_stream *)vn->data;
+    struct fs_node *n = s->node;
+    if (s->pos >= n->size) return 0;
+    size_t avail = n->size - s->pos;
+    if (count > avail) count = avail;
+    const uint8_t *src = n->readonly ? n->ro_data : n->data;
+    for (size_t i = 0; i < count; i++)
+        ((uint8_t *)buf)[i] = src[s->pos + i];
+    s->pos += count;
+    return (int)count;
+}
+
+static int file_write(vnode_t *vn, const void *buf, size_t count) {
+    struct file_stream *s = (struct file_stream *)vn->data;
+    struct fs_node *n = s->node;
+    if (n->readonly) return -1;
+    if (s->pos > FS_FILE_BUFSZ) return -1;
+    size_t room = FS_FILE_BUFSZ - s->pos;
+    if (count > room) count = room;
+    const uint8_t *src = (const uint8_t *)buf;
+    for (size_t i = 0; i < count; i++)
+        n->data[s->pos + i] = src[i];
+    s->pos += count;
+    if (s->pos > n->size)
+        n->size = s->pos;
+    return (int)count;
+}
+
+static const struct vnode_ops file_ops = {
+    .open = file_open,
+    .read = file_read,
+    .write = file_write,
+    .close = file_close,
+};
+
+static int dir_open(vnode_t *vn) { (void)vn; return 0; }
+static int dir_close(vnode_t *vn) { (void)vn; return 0; }
+static int dir_read(vnode_t *vn, void *buf, size_t count) {
     (void)vn; (void)buf; (void)count;
-    return -1;  /* read-only */
+    return -1;
+}
+static int dir_write(vnode_t *vn, const void *buf, size_t count) {
+    (void)vn; (void)buf; (void)count;
+    return -1;
 }
 
-static int ramfs_close(vnode_t *vn) {
-    (void)vn;
-    return 0;
+static int dir_getdents_vn(vnode_t *vn, struct dirent *ents, size_t count) {
+    struct file_stream *s = (struct file_stream *)vn->data;
+    size_t max_entries = count / sizeof(struct dirent);
+    if (!s || !s->node || s->node->type != NODE_DIR || max_entries == 0)
+        return -1;
+
+    struct fs_node *child = s->node->first_child;
+    size_t skip = s->pos;
+    while (child && skip > 0) {
+        child = child->next_sibling;
+        skip--;
+    }
+
+    size_t copied = 0;
+    while (child && copied < max_entries) {
+        ents[copied].d_type = node_type_to_dirent(child->type);
+        ents[copied].d_size = (uint32_t)child->size;
+        copy_dirent_name(ents[copied].d_name, child->name);
+        copied++;
+        s->pos++;
+        child = child->next_sibling;
+    }
+    return (int)(copied * sizeof(struct dirent));
 }
 
-static const struct vnode_ops ramfs_ops = {
-    .open  = ramfs_open,
-    .read  = ramfs_read,
-    .write = ramfs_write,
-    .close = ramfs_close,
+static const struct vnode_ops dir_ops = {
+    .open = dir_open,
+    .read = dir_read,
+    .write = dir_write,
+    .getdents = dir_getdents_vn,
+    .close = dir_close,
+};
+
+static int minifs_vn_open(vnode_t *vn) { (void)vn; return 0; }
+static int minifs_vn_close(vnode_t *vn) { (void)vn; return 0; }
+
+static int minifs_vn_read(vnode_t *vn, void *buf, size_t count) {
+    struct file_stream *s = (struct file_stream *)vn->data;
+    return minifs_read(s->minifs_ino, &s->pos, buf, count);
+}
+
+static int minifs_vn_write(vnode_t *vn, const void *buf, size_t count) {
+    struct file_stream *s = (struct file_stream *)vn->data;
+    return minifs_write(s->minifs_ino, &s->pos, buf, count);
+}
+
+static int minifs_dir_read(vnode_t *vn, void *buf, size_t count) {
+    (void)vn; (void)buf; (void)count;
+    return -1;
+}
+
+static int minifs_dir_write(vnode_t *vn, const void *buf, size_t count) {
+    (void)vn; (void)buf; (void)count;
+    return -1;
+}
+
+static int minifs_dir_getdents(vnode_t *vn, struct dirent *ents, size_t count) {
+    struct file_stream *s = (struct file_stream *)vn->data;
+    return minifs_getdents(s->minifs_ino, &s->pos, ents, count);
+}
+
+static const struct vnode_ops minifs_file_ops = {
+    .open = minifs_vn_open,
+    .read = minifs_vn_read,
+    .write = minifs_vn_write,
+    .close = minifs_vn_close,
+};
+
+static const struct vnode_ops minifs_dir_ops = {
+    .open = minifs_vn_open,
+    .read = minifs_dir_read,
+    .write = minifs_dir_write,
+    .getdents = minifs_dir_getdents,
+    .close = minifs_vn_close,
 };
 
 /* ------------------------------------------------------------------ */
-/*  devfs ops: /dev/serial                                              */
+/*  Device vnode ops                                                   */
 /* ------------------------------------------------------------------ */
 
 static int serial_open(vnode_t *vn)  { (void)vn; return 0; }
@@ -112,7 +695,7 @@ static int serial_close(vnode_t *vn) { (void)vn; return 0; }
 
 static int serial_read_dev(vnode_t *vn, void *buf, size_t count) {
     (void)vn; (void)buf; (void)count;
-    return 0;  /* no input */
+    return 0;
 }
 
 static int serial_write_dev(vnode_t *vn, const void *buf, size_t count) {
@@ -129,21 +712,52 @@ static const struct vnode_ops serial_dev_ops = {
     .close = serial_close,
 };
 
-/* ------------------------------------------------------------------ */
-/*  devfs ops: /dev/null                                                */
-/* ------------------------------------------------------------------ */
+extern void vga_putc(char c);
+
+static int console_open(vnode_t *vn)  { (void)vn; return 0; }
+static int console_close(vnode_t *vn) { (void)vn; return 0; }
+
+static int console_read(vnode_t *vn, void *buf, size_t count) {
+    (void)vn;
+    uint8_t *out = (uint8_t *)buf;
+    size_t n = 0;
+    while (n < count) {
+        int c = keyboard_getchar();
+        if (c < 0)
+            break;
+        out[n++] = (uint8_t)c;
+    }
+    return (int)n;
+}
+
+static int console_write(vnode_t *vn, const void *buf, size_t count) {
+    (void)vn;
+    const uint8_t *p = (const uint8_t *)buf;
+    for (size_t i = 0; i < count; i++) {
+        serial_putc((char)p[i]);
+        vga_putc((char)p[i]);
+    }
+    return (int)count;
+}
+
+static const struct vnode_ops console_dev_ops = {
+    .open  = console_open,
+    .read  = console_read,
+    .write = console_write,
+    .close = console_close,
+};
 
 static int null_open(vnode_t *vn)   { (void)vn; return 0; }
 static int null_close(vnode_t *vn)  { (void)vn; return 0; }
 
 static int null_read(vnode_t *vn, void *buf, size_t count) {
     (void)vn; (void)buf; (void)count;
-    return 0;  /* EOF */
+    return 0;
 }
 
 static int null_write(vnode_t *vn, const void *buf, size_t count) {
     (void)vn; (void)buf;
-    return (int)count;  /* succeed, discard */
+    return (int)count;
 }
 
 static const struct vnode_ops null_dev_ops = {
@@ -154,227 +768,645 @@ static const struct vnode_ops null_dev_ops = {
 };
 
 /* ------------------------------------------------------------------ */
-/*  Writable ramfs files                                                */
-/* ------------------------------------------------------------------ */
 
-#define WFILE_MAX    16
-#define WFILE_BUFSZ  512
-#define WFILE_NAMELEN 32
-
-struct wfile {
-    char    name[WFILE_NAMELEN];
-    uint8_t data[WFILE_BUFSZ];
-    size_t  size;
-    int     used;
-};
-
-static struct wfile wfiles[WFILE_MAX];
-
-static struct wfile *wfile_find(const char *name) {
-    for (int i = 0; i < WFILE_MAX; i++) {
-        if (!wfiles[i].used) continue;
-        const char *a = name, *b = wfiles[i].name;
-        while (*a && *b && *a == *b) { a++; b++; }
-        if (*a == 0 && *b == 0) return &wfiles[i];
-    }
-    return 0;
+void devfs_register(const char *name, const struct vnode_ops *ops, void *data) {
+    if (!dev_node) return;
+    int len = 0;
+    while (name[len]) len++;
+    if (find_child(dev_node, name, len)) return;
+    struct fs_node *n = alloc_node(NODE_DEV, name, len);
+    if (!n) return;
+    n->dev_ops = ops;
+    n->dev_data = data;
+    add_child(dev_node, n);
 }
 
-static struct wfile *wfile_alloc(void) {
-    for (int i = 0; i < WFILE_MAX; i++)
-        if (!wfiles[i].used) return &wfiles[i];
-    return 0;
-}
+int vfs_open_flags(const char *path, int flags) {
+    char abs[128];
+    if (normalize_path(path, abs, sizeof(abs)) < 0)
+        return -1;
 
-int vfs_create(const char *path) {
-    if (wfile_find(path)) return 0;  /* already exists */
-    struct wfile *wf = wfile_alloc();
-    if (!wf) return -1;
-    int i = 0;
-    while (path[i] && i < WFILE_NAMELEN - 1) { wf->name[i] = path[i]; i++; }
-    wf->name[i] = 0;
-    wf->size = 0;
-    wf->used = 1;
-    return 0;
-}
-
-int vfs_write_file(const char *path, const void *data, size_t len) {
-    struct wfile *wf = wfile_find(path);
-    if (!wf) {
-        if (vfs_create(path) < 0) return -1;
-        wf = wfile_find(path);
-    }
-    /* Append, capped at buffer size */
-    const uint8_t *src = (const uint8_t *)data;
-    for (size_t i = 0; i < len && wf->size < WFILE_BUFSZ; i++)
-        wf->data[wf->size++] = src[i];
-    return 0;
-}
-
-int vfs_remove(const char *path) {
-    struct wfile *wf = wfile_find(path);
-    if (!wf) return -1;
-    wf->used = 0;
-    return 0;
-}
-
-/* ------------------------------------------------------------------ */
-/*  vnode ops for writable ramfs                                        */
-/* ------------------------------------------------------------------ */
-
-struct wfile_stream {
-    struct wfile *wf;
-    size_t pos;
-};
-
-static int wfile_open(vnode_t *vn)  { (void)vn; return 0; }
-static int wfile_close(vnode_t *vn) { (void)vn; return 0; }
-
-static int wfile_read(vnode_t *vn, void *buf, size_t count) {
-    struct wfile_stream *s = (struct wfile_stream *)vn->data;
-    if (!s->wf || s->pos >= s->wf->size) return 0;
-    size_t n = s->wf->size - s->pos;
-    if (n > count) n = count;
-    for (size_t i = 0; i < n; i++)
-        ((uint8_t *)buf)[i] = s->wf->data[s->pos + i];
-    s->pos += n;
-    return (int)n;
-}
-
-static int wfile_write(vnode_t *vn, const void *buf, size_t count) {
-    struct wfile_stream *s = (struct wfile_stream *)vn->data;
-    if (!s->wf) return -1;
-    const uint8_t *src = (const uint8_t *)buf;
-    size_t written = 0;
-    for (size_t i = 0; i < count && s->wf->size < WFILE_BUFSZ; i++) {
-        s->wf->data[s->wf->size++] = src[i];
-        written++;
-    }
-    return (int)written;
-}
-
-static const struct vnode_ops wfile_ops = {
-    .open  = wfile_open,
-    .read  = wfile_read,
-    .write = wfile_write,
-    .close = wfile_close,
-};
-
-/* ------------------------------------------------------------------ */
-
-static int alloc_fd(vnode_t *vn) {
-    for (int i = 0; i < MAX_FD; i++) {
-        if (fd_table[i] == 0) {
-            fd_table[i] = vn;
-            return i;
-        }
-    }
-    return -1;
+    vfs_lock();
+    int owner = current_fd_owner();
+    int fd = open_abs_for_owner(owner, abs, flags);
+    vfs_unlock();
+    return fd;
 }
 
 int vfs_open(const char *path) {
-    /* devfs lookup: "/dev/..." */
-    if (path[0] == '/' && path[1] == 'd' && path[2] == 'e' && path[3] == 'v' && path[4] == '/') {
-        const char *name = path + 5;
-        for (int i = 0; i < devfs_count; i++) {
-            const char *a = name, *b = devfs_nodes[i]->name;
-            while (*a && *b && *a == *b) { a++; b++; }
-            if (*a == 0 && *b == 0) {
-                vnode_t *vn = devfs_nodes[i];
-                if (vn->ops->open) vn->ops->open(vn);
-                int fd = alloc_fd(vn);
-                return fd;
-            }
-        }
-    }
-
-    /* ramfs lookup */
-    const struct ramfs_file *rf = ramfs_lookup(path);
-    if (rf) {
-        static struct ramfs_stream streams[16];
-        static int si = 0;
-        struct ramfs_stream *s = &streams[si++ % 16];
-        s->base = rf->data;
-        s->size = rf->size;
-        s->pos  = 0;
-
-        static vnode_t ramfs_vnodes[16];
-        static int vi = 0;
-        vnode_t *vn = &ramfs_vnodes[vi++ % 16];
-        vn->name = path;
-        vn->ops  = &ramfs_ops;
-        vn->data = s;
-        vn->ops->open(vn);
-        return alloc_fd(vn);
-    }
-
-    /* writable file lookup */
-    struct wfile *wf = wfile_find(path);
-    if (wf) {
-        static struct wfile_stream wstreams[16];
-        static int wi = 0;
-        struct wfile_stream *ws = &wstreams[wi++ % 16];
-        ws->wf  = wf;
-        ws->pos = 0;
-
-        static vnode_t wfile_vnodes[16];
-        static int wvi = 0;
-        vnode_t *wvn = &wfile_vnodes[wvi++ % 16];
-        wvn->name = path;
-        wvn->ops  = &wfile_ops;
-        wvn->data = ws;
-        wvn->ops->open(wvn);
-        return alloc_fd(wvn);
-    }
-
-    return -1;
+    return vfs_open_flags(path, O_RDONLY);
 }
 
 int vfs_read(int fd, void *buf, size_t count) {
-    if (fd < 0 || fd >= MAX_FD || !fd_table[fd]) return -1;
-    return fd_table[fd]->ops->read(fd_table[fd], buf, count);
-}
-
-int vfs_write(int fd, const void *buf, size_t count) {
-    if (fd < 0 || fd >= MAX_FD || !fd_table[fd]) return -1;
-    return fd_table[fd]->ops->write(fd_table[fd], buf, count);
-}
-
-int vfs_close(int fd) {
-    if (fd < 0 || fd >= MAX_FD || !fd_table[fd]) return -1;
-    int ret = 0;
-    if (fd_table[fd]->ops->close)
-        ret = fd_table[fd]->ops->close(fd_table[fd]);
-    fd_table[fd] = 0;
+    vfs_lock();
+    int owner = current_fd_owner();
+    struct open_file *of = fd_to_open_file(owner, fd);
+    if (!of || !open_can_read(of->flags) || !of->vnode.ops || !of->vnode.ops->read) {
+        vfs_unlock();
+        return -1;
+    }
+    int ret = of->vnode.ops->read(&of->vnode, buf, count);
+    vfs_unlock();
     return ret;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Initialise                                                           */
-/* ------------------------------------------------------------------ */
+int vfs_write(int fd, const void *buf, size_t count) {
+    vfs_lock();
+    int owner = current_fd_owner();
+    struct open_file *of = fd_to_open_file(owner, fd);
+    if (!of || !open_can_write(of->flags) || !of->vnode.ops || !of->vnode.ops->write) {
+        vfs_unlock();
+        return -1;
+    }
+    if (of->flags & O_APPEND) {
+        if (of->stream.node && of->stream.node->type == NODE_FILE) {
+            of->stream.pos = of->stream.node->size;
+        } else if (of->stream.minifs_ino) {
+            size_t size = 0;
+            if (minifs_size_ino(of->stream.minifs_ino, &size) < 0) {
+                vfs_unlock();
+                return -1;
+            }
+            of->stream.pos = size;
+        }
+    }
+    int ret = of->vnode.ops->write(&of->vnode, buf, count);
+    vfs_unlock();
+    return ret;
+}
+
+int vfs_close(int fd) {
+    vfs_lock();
+    int owner = current_fd_owner();
+    int ret = close_fd_locked(owner, fd);
+    vfs_unlock();
+    return ret;
+}
+
+int vfs_dup(int fd) {
+    vfs_lock();
+    int owner = current_fd_owner();
+    struct open_file *of = fd_to_open_file(owner, fd);
+    int newfd = alloc_fd_slot(owner);
+    if (!of || newfd < 0) {
+        vfs_unlock();
+        return -1;
+    }
+    int of_idx = fd_open_file[owner][fd];
+    of->refs++;
+    fd_used[owner][newfd] = 1;
+    fd_open_file[owner][newfd] = of_idx;
+    vfs_unlock();
+    return newfd;
+}
+
+int vfs_dup2(int oldfd, int newfd) {
+    vfs_lock();
+    int owner = current_fd_owner();
+    struct open_file *of = fd_to_open_file(owner, oldfd);
+    if (!of || newfd < 0 || newfd >= MAX_FD) {
+        vfs_unlock();
+        return -1;
+    }
+    if (oldfd == newfd) {
+        vfs_unlock();
+        return newfd;
+    }
+    if (fd_used[owner][newfd])
+        close_fd_locked(owner, newfd);
+    int of_idx = fd_open_file[owner][oldfd];
+    of->refs++;
+    fd_used[owner][newfd] = 1;
+    fd_open_file[owner][newfd] = of_idx;
+    vfs_unlock();
+    return newfd;
+}
+
+int vfs_lseek(int fd, int offset, int whence) {
+    vfs_lock();
+    int owner = current_fd_owner();
+    struct open_file *of = fd_to_open_file(owner, fd);
+    if (!of) {
+        vfs_unlock();
+        return -1;
+    }
+
+    size_t size = 0;
+    if (of->stream.node) {
+        if (of->stream.node->type != NODE_FILE) {
+            vfs_unlock();
+            return -1;
+        }
+        size = of->stream.node->size;
+    } else if (of->stream.minifs_ino) {
+        if (minifs_size_ino(of->stream.minifs_ino, &size) < 0) {
+            vfs_unlock();
+            return -1;
+        }
+    } else {
+        vfs_unlock();
+        return -1;
+    }
+
+    int base;
+    if (whence == SEEK_SET)
+        base = 0;
+    else if (whence == SEEK_CUR)
+        base = (int)of->stream.pos;
+    else if (whence == SEEK_END)
+        base = (int)size;
+    else {
+        vfs_unlock();
+        return -1;
+    }
+
+    int next = base + offset;
+    if (next < 0) {
+        vfs_unlock();
+        return -1;
+    }
+    of->stream.pos = (size_t)next;
+    vfs_unlock();
+    return next;
+}
+
+static uint32_t node_type_to_dirent(enum node_type type) {
+    if (type == NODE_DIR) return DT_DIR;
+    if (type == NODE_FILE) return DT_REG;
+    if (type == NODE_DEV) return DT_CHR;
+    return DT_UNKNOWN;
+}
+
+static uint32_t node_type_to_mode(enum node_type type) {
+    if (type == NODE_DIR) return S_IFDIR | 0755u;
+    if (type == NODE_FILE) return S_IFREG | 0644u;
+    if (type == NODE_DEV) return S_IFCHR | 0666u;
+    return 0;
+}
+
+static int ramfs_create_path(const char *abs, const char *rel) {
+    (void)rel;
+    vfs_lock();
+    struct fs_node *n = create_file_locked(abs);
+    vfs_unlock();
+    return n ? 0 : -1;
+}
+
+static int ramfs_mkdir_path(const char *abs, const char *rel) {
+    (void)rel;
+    vfs_lock();
+    const char *leaf;
+    int leaf_len;
+    struct fs_node *parent = resolve_parent(abs, &leaf, &leaf_len);
+    if (!parent || parent->type != NODE_DIR || leaf_len <= 0 ||
+        find_child(parent, leaf, leaf_len)) {
+        vfs_unlock();
+        return -1;
+    }
+    struct fs_node *n = alloc_node(NODE_DIR, leaf, leaf_len);
+    if (!n) {
+        vfs_unlock();
+        return -1;
+    }
+    add_child(parent, n);
+    vfs_unlock();
+    return 0;
+}
+
+static int ramfs_unlink_path(const char *abs, const char *rel) {
+    (void)rel;
+    vfs_lock();
+    struct fs_node *n = resolve_path(abs);
+    if (!n || n == root_node || n == dev_node || n->readonly || n->type != NODE_FILE) {
+        vfs_unlock();
+        return -1;
+    }
+    int ret = unlink_child(n);
+    vfs_unlock();
+    return ret;
+}
+
+static int ramfs_rmdir_path(const char *abs, const char *rel) {
+    (void)rel;
+    vfs_lock();
+    struct fs_node *n = resolve_path(abs);
+    if (!n || n == root_node || n == dev_node || n->readonly ||
+        n->type != NODE_DIR || n->first_child) {
+        vfs_unlock();
+        return -1;
+    }
+    int ret = unlink_child(n);
+    vfs_unlock();
+    return ret;
+}
+
+static int ramfs_rename_path(const char *old_abs, const char *old_rel,
+                             const char *new_abs, const char *new_rel) {
+    (void)old_rel; (void)new_rel;
+    vfs_lock();
+    struct fs_node *n = resolve_path(old_abs);
+    const char *leaf;
+    int leaf_len;
+    struct fs_node *new_parent = resolve_parent(new_abs, &leaf, &leaf_len);
+    if (!n || n == root_node || n == dev_node || n->readonly ||
+        !new_parent || new_parent->type != NODE_DIR || leaf_len <= 0 ||
+        find_child(new_parent, leaf, leaf_len)) {
+        vfs_unlock();
+        return -1;
+    }
+    if (detach_child(n) < 0) {
+        vfs_unlock();
+        return -1;
+    }
+    copy_name(n->name, leaf, leaf_len);
+    add_child(new_parent, n);
+    vfs_unlock();
+    return 0;
+}
+
+static int ramfs_stat_path(const char *abs, const char *rel, struct stat *st) {
+    (void)rel;
+    vfs_lock();
+    struct fs_node *n = resolve_path(abs);
+    if (!n) {
+        vfs_unlock();
+        return -1;
+    }
+    st->st_type = node_type_to_dirent(n->type);
+    st->st_mode = node_type_to_mode(n->type);
+    st->st_size = (uint32_t)n->size;
+    vfs_unlock();
+    return 0;
+}
+
+static int ramfs_is_dir_path(const char *abs, const char *rel) {
+    (void)rel;
+    vfs_lock();
+    struct fs_node *n = resolve_path(abs);
+    int ret = (n && n->type == NODE_DIR) ? 1 : 0;
+    vfs_unlock();
+    return ret;
+}
+
+static int ramfs_ls_path(const char *abs, const char *rel, void (*putc)(char)) {
+    (void)rel;
+    char out[2048];
+    int pos = 0;
+    vfs_lock();
+    struct fs_node *n = resolve_path(abs);
+    if (!n) {
+        vfs_unlock();
+        return -1;
+    }
+    if (n->type == NODE_DIR) {
+        for (struct fs_node *child = n->first_child; child; child = child->next_sibling) {
+            const char *s = child->name;
+            while (*s && pos < (int)sizeof(out) - 1)
+                out[pos++] = *s++;
+            if (child->type == NODE_DIR && pos < (int)sizeof(out) - 1)
+                out[pos++] = '/';
+            if (pos < (int)sizeof(out) - 1)
+                out[pos++] = '\n';
+        }
+    } else {
+        const char *s = n->name;
+        while (*s && pos < (int)sizeof(out) - 1)
+            out[pos++] = *s++;
+        if (pos < (int)sizeof(out) - 1)
+            out[pos++] = '\n';
+    }
+    vfs_unlock();
+
+    for (int i = 0; i < pos; i++)
+        putc(out[i]);
+    return 0;
+}
+
+static int minifs_create_path(const char *abs, const char *rel) {
+    (void)abs;
+    return minifs_create(rel);
+}
+
+static int minifs_mkdir_path(const char *abs, const char *rel) {
+    (void)abs;
+    return minifs_mkdir(rel);
+}
+
+static int minifs_unlink_path(const char *abs, const char *rel) {
+    (void)abs;
+    return minifs_unlink(rel);
+}
+
+static int minifs_rmdir_path(const char *abs, const char *rel) {
+    (void)abs;
+    return minifs_rmdir(rel);
+}
+
+static int minifs_rename_path(const char *old_abs, const char *old_rel,
+                              const char *new_abs, const char *new_rel) {
+    (void)old_abs; (void)new_abs;
+    return minifs_rename(old_rel, new_rel);
+}
+
+static int minifs_stat_path(const char *abs, const char *rel, struct stat *st) {
+    (void)abs;
+    return minifs_stat(rel, st);
+}
+
+static int minifs_is_dir_path_op(const char *abs, const char *rel) {
+    (void)abs;
+    return minifs_is_dir_path(rel);
+}
+
+static int minifs_ls_path_op(const char *abs, const char *rel, void (*putc)(char)) {
+    uint16_t ino;
+    struct dirent ents[8];
+    size_t off = 0;
+    if (minifs_open(rel, &ino) < 0)
+        return -1;
+    if (minifs_is_dir_ino(ino)) {
+        int n;
+        while ((n = minifs_getdents(ino, &off, ents, sizeof(ents))) > 0) {
+            int count = n / (int)sizeof(struct dirent);
+            for (int i = 0; i < count; i++) {
+                const char *s = ents[i].d_name;
+                while (*s) putc(*s++);
+                if (ents[i].d_type == DT_DIR) putc('/');
+                putc('\n');
+            }
+        }
+    } else {
+        const char *s = abs;
+        const char *name = s;
+        while (*s) {
+            if (*s == '/') name = s + 1;
+            s++;
+        }
+        while (*name) putc(*name++);
+        putc('\n');
+    }
+    return 0;
+}
+
+static const struct fs_ops ramfs_ops = {
+    .open = ramfs_fs_open,
+    .create = ramfs_create_path,
+    .mkdir = ramfs_mkdir_path,
+    .unlink = ramfs_unlink_path,
+    .rmdir = ramfs_rmdir_path,
+    .rename = ramfs_rename_path,
+    .stat = ramfs_stat_path,
+    .is_dir = ramfs_is_dir_path,
+    .ls = ramfs_ls_path,
+};
+
+static const struct fs_ops minifs_ops = {
+    .open = minifs_fs_open,
+    .create = minifs_create_path,
+    .mkdir = minifs_mkdir_path,
+    .unlink = minifs_unlink_path,
+    .rmdir = minifs_rmdir_path,
+    .rename = minifs_rename_path,
+    .stat = minifs_stat_path,
+    .is_dir = minifs_is_dir_path_op,
+    .ls = minifs_ls_path_op,
+};
+
+int vfs_stat(const char *path, struct stat *st) {
+    if (!st)
+        return -1;
+    char abs[128];
+    if (normalize_path(path, abs, sizeof(abs)) < 0)
+        return -1;
+    const char *rel;
+    struct vfs_mount *mnt = mount_for_path(abs, &rel);
+    if (!mnt || !mnt->ops->stat)
+        return -1;
+    return mnt->ops->stat(abs, rel, st);
+}
+
+static void copy_dirent_name(char *dst, const char *src) {
+    int i = 0;
+    while (i < FS_NAME_LEN - 1 && src[i]) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+    while (++i < FS_NAME_LEN)
+        dst[i] = 0;
+}
+
+int vfs_getdents(int fd, struct dirent *ents, size_t count) {
+    if (!ents)
+        return -1;
+    size_t max_entries = count / sizeof(struct dirent);
+    if (max_entries == 0)
+        return -1;
+
+    vfs_lock();
+    int owner = current_fd_owner();
+    struct open_file *of = fd_to_open_file(owner, fd);
+    if (!of || !of->vnode.ops || !of->vnode.ops->getdents) {
+        vfs_unlock();
+        return -1;
+    }
+    int ret = of->vnode.ops->getdents(&of->vnode, ents, count);
+    vfs_unlock();
+    return ret;
+}
+
+void ramfs_register(const char *name, const uint8_t *data, size_t size) {
+    char abs[128];
+    if (normalize_path(name, abs, sizeof(abs)) < 0)
+        return;
+
+    vfs_lock();
+    const char *leaf;
+    int leaf_len;
+    struct fs_node *parent = resolve_parent(abs, &leaf, &leaf_len);
+    if (parent && parent->type == NODE_DIR && !find_child(parent, leaf, leaf_len)) {
+        struct fs_node *n = alloc_node(NODE_FILE, leaf, leaf_len);
+        if (n) {
+            n->readonly = 1;
+            n->ro_data = data;
+            n->size = size;
+            add_child(parent, n);
+        }
+    }
+    vfs_unlock();
+}
+
+int vfs_mkdir(const char *path) {
+    char abs[128];
+    if (normalize_path(path, abs, sizeof(abs)) < 0)
+        return -1;
+    const char *rel;
+    struct vfs_mount *mnt = mount_for_path(abs, &rel);
+    if (!mnt || !mnt->ops->mkdir)
+        return -1;
+    return mnt->ops->mkdir(abs, rel);
+}
+
+int vfs_create(const char *path) {
+    char abs[128];
+    if (normalize_path(path, abs, sizeof(abs)) < 0)
+        return -1;
+    const char *rel;
+    struct vfs_mount *mnt = mount_for_path(abs, &rel);
+    if (!mnt || !mnt->ops->create)
+        return -1;
+    return mnt->ops->create(abs, rel);
+}
+
+int vfs_write_file(const char *path, const void *data, size_t len) {
+    int fd = vfs_open_flags(path, O_CREAT | O_TRUNC | O_WRONLY);
+    if (fd < 0)
+        return -1;
+    int ret = vfs_write(fd, data, len);
+    vfs_close(fd);
+    return ret;
+}
+
+int vfs_remove(const char *path) {
+    char abs[128];
+    if (normalize_path(path, abs, sizeof(abs)) < 0)
+        return -1;
+    const char *rel;
+    struct vfs_mount *mnt = mount_for_path(abs, &rel);
+    if (!mnt || !mnt->ops->unlink)
+        return -1;
+    return mnt->ops->unlink(abs, rel);
+}
+
+int vfs_rmdir(const char *path) {
+    char abs[128];
+    if (normalize_path(path, abs, sizeof(abs)) < 0)
+        return -1;
+    const char *rel;
+    struct vfs_mount *mnt = mount_for_path(abs, &rel);
+    if (!mnt || !mnt->ops->rmdir)
+        return -1;
+    return mnt->ops->rmdir(abs, rel);
+}
+
+int vfs_rename(const char *old_path, const char *new_path) {
+    char old_abs[128];
+    char new_abs[128];
+    if (normalize_path(old_path, old_abs, sizeof(old_abs)) < 0 ||
+        normalize_path(new_path, new_abs, sizeof(new_abs)) < 0)
+        return -1;
+    const char *old_rel;
+    const char *new_rel;
+    struct vfs_mount *old_mnt = mount_for_path(old_abs, &old_rel);
+    struct vfs_mount *new_mnt = mount_for_path(new_abs, &new_rel);
+    if (!old_mnt || old_mnt != new_mnt || !old_mnt->ops->rename)
+        return -1;
+    return old_mnt->ops->rename(old_abs, old_rel, new_abs, new_rel);
+}
+
+int vfs_is_dir(const char *path) {
+    char abs[128];
+    if (normalize_path(path, abs, sizeof(abs)) < 0)
+        return 0;
+    const char *rel;
+    struct vfs_mount *mnt = mount_for_path(abs, &rel);
+    if (!mnt || !mnt->ops->is_dir)
+        return 0;
+    return mnt->ops->is_dir(abs, rel);
+}
+
+int vfs_chdir(const char *path) {
+    char abs[128];
+    if (normalize_path(path, abs, sizeof(abs)) < 0)
+        return -1;
+    if (!vfs_is_dir(abs))
+        return -1;
+    return task_set_cwd(abs);
+}
+
+int vfs_getcwd(char *buf, size_t size) {
+    return task_get_cwd(buf, (int)size);
+}
 
 void vfs_init(void) {
-    for (int i = 0; i < MAX_FD; i++) fd_table[i] = 0;
+    vfs_lock();
+    for (int i = 0; i < FS_MAX_NODES; i++) nodes[i].used = 0;
+    for (int i = 0; i < MAX_MOUNTS; i++) mounts[i].used = 0;
+    for (int t = 0; t < MAX_TASKS; t++) {
+        for (int i = 0; i < MAX_FD; i++) {
+            fd_used[t][i] = 0;
+            fd_open_file[t][i] = -1;
+            open_files[t][i].used = 0;
+            open_files[t][i].refs = 0;
+            open_files[t][i].flags = 0;
+        }
+    }
 
-    devfs_register("serial", &serial_dev_ops, 0);
-    devfs_register("null",   &null_dev_ops,   0);
+    root_node = alloc_node(NODE_DIR, "", 0);
+    dev_node = alloc_node(NODE_DIR, "dev", 3);
+    fs_node = alloc_node(NODE_DIR, "fs", 2);
+    if (root_node && dev_node)
+        add_child(root_node, dev_node);
+    if (root_node && fs_node)
+        add_child(root_node, fs_node);
+    add_mount("/", &ramfs_ops);
+    add_mount("/dev", &ramfs_ops);
+    add_mount("/fs", &minifs_ops);
+    vfs_unlock();
 
-    serial_puts("[vfs] devfs: /dev/serial, /dev/null\n");
+    devfs_register("serial",  &serial_dev_ops,  0);
+    devfs_register("console", &console_dev_ops, 0);
+    devfs_register("null",    &null_dev_ops,    0);
+    minifs_mount();
+
+    serial_puts("[vfs] ramfs tree + devfs ready\n");
+}
+
+void vfs_task_reset(int task_id) {
+    if (task_id < 0 || task_id >= MAX_TASKS) return;
+    vfs_lock();
+    for (int i = 0; i < MAX_FD; i++)
+        if (fd_used[task_id][i])
+            close_fd_locked(task_id, i);
+    for (int i = 0; i < MAX_FD; i++) {
+        fd_used[task_id][i] = 0;
+        fd_open_file[task_id][i] = -1;
+        open_files[task_id][i].used = 0;
+        open_files[task_id][i].refs = 0;
+        open_files[task_id][i].flags = 0;
+    }
+    vfs_unlock();
+}
+
+int vfs_setup_stdio(int task_id, int console_silent) {
+    if (!valid_fd_owner(task_id))
+        return -1;
+    const char *path = console_silent ? "/dev/null" : "/dev/console";
+
+    vfs_task_reset(task_id);
+    vfs_lock();
+    int in_fd = open_abs_for_owner(task_id, path, O_RDWR);
+    int out_fd = open_abs_for_owner(task_id, path, O_RDWR);
+    int err_fd = open_abs_for_owner(task_id, path, O_RDWR);
+    vfs_unlock();
+
+    return (in_fd == 0 && out_fd == 1 && err_fd == 2) ? 0 : -1;
+}
+
+void vfs_ls_path(const char *path, void (*putc)(char)) {
+    char abs[128];
+
+    if (normalize_path((path && path[0]) ? path : ".", abs, sizeof(abs)) < 0)
+        return;
+    const char *rel;
+    struct vfs_mount *mnt = mount_for_path(abs, &rel);
+    if (!mnt || !mnt->ops->ls)
+        return;
+    mnt->ops->ls(abs, rel, putc);
 }
 
 void vfs_ls(void (*putc)(char)) {
-    const char *s = "\n/dev/serial\n/dev/null\n/init\n";
-    while (*s) putc(*s++);
-    for (int i = 0; i < ramfs_count; i++) {
-        const char *n = ramfs_files[i].name;
-        putc('\n'); while (*n) putc(*n++);
-    }
-    for (int i = 0; i < WFILE_MAX; i++) {
-        if (!wfiles[i].used) continue;
-        const char *n = wfiles[i].name;
-        putc('\n'); while (*n) putc(*n++);
-    }
-    putc('\n');
+    vfs_ls_path("/", putc);
 }
 
 int vfs_cat(const char *path, void (*putc)(char)) {
@@ -385,5 +1417,5 @@ int vfs_cat(const char *path, void (*putc)(char)) {
     while ((n = vfs_read(fd, buf, sizeof(buf))) > 0)
         for (int i = 0; i < n; i++) putc(buf[i]);
     vfs_close(fd);
-    return 0;
+    return n < 0 ? -1 : 0;
 }

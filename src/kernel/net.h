@@ -107,6 +107,15 @@ int  net_tcp_send(const void *data, size_t len);
 int  net_tcp_recv(void *buf, size_t max);
 void net_tcp_close(void);
 
+int  net_udp_send(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
+                  const void *data, size_t len);
+int  net_udp_recv(uint16_t local_port, uint32_t *src_ip, uint16_t *src_port,
+                  void *buf, size_t max);
+int  net_icmp_send_echo(uint32_t dst_ip, uint16_t id, uint16_t seq,
+                        const void *data, size_t len);
+int  net_icmp_recv_echo(uint32_t src_ip, uint16_t id, uint16_t *seq_out,
+                        void *buf, size_t max);
+
 /* HTTP GET — resolves host, connects to port 80, sends GET / HTTP/1.0,
  * prints response via putc. */
 int  net_wget(const char *host, void (*putc)(char));

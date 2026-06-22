@@ -5,6 +5,7 @@
 
 static volatile uint8_t buf[BUF_SIZE];
 static volatile int     head, tail;
+static volatile int     shift_down;
 
 /* US QWERTY scancode → ASCII (scancode set 1, unshifted) */
 static const char scancode_ascii[128] = {
@@ -16,14 +17,33 @@ static const char scancode_ascii[128] = {
     '7','8','9','-','4','5','6','+','1','2','3','0','.',
 };
 
+/* US QWERTY scancode → ASCII with Shift held. */
+static const char scancode_ascii_shift[128] = {
+    0,   0x1B, '!','@','#','$','%','^','&','*','(',')','_','+','\b',
+    '\t','Q','W','E','R','T','Y','U','I','O','P','{','}','\n',
+    0,   'A','S','D','F','G','H','J','K','L',':','"','~',
+    0,   '|','Z','X','C','V','B','N','M','<','>','?',0,
+    '*', 0,   ' ',0,  0,0,0,0,0,0,0,0,0,0,0,0,
+    '7','8','9','-','4','5','6','+','1','2','3','0','.',
+};
+
 void keyboard_init(void) {
     head = tail = 0;
+    shift_down = 0;
 }
 
 void keyboard_handler(uint8_t scancode) {
-    if (scancode & 0x80) return;   /* key release — ignore */
+    uint8_t code = scancode & 0x7F;
+    int released = (scancode & 0x80) != 0;
+
+    if (code == 0x2A || code == 0x36) {
+        shift_down = !released;
+        return;
+    }
+
+    if (released) return;
     if (scancode >= 128) return;
-    char c = scancode_ascii[scancode];
+    char c = shift_down ? scancode_ascii_shift[scancode] : scancode_ascii[scancode];
     if (c == 0) return;
 
     int next = (tail + 1) % BUF_SIZE;

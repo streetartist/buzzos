@@ -35,6 +35,8 @@ void vga_clear(void) {
 
 void vga_putc(char c) {
     if (c == '\n') { newline(); vga_update_cursor(); return; }
+    if (c == '\r') { col = 0; vga_update_cursor(); return; }
+    if (c == '\b') { vga_backspace(); return; }
     vga[row * VGA_WIDTH + col] = vga_cell(c);
     if (++col == VGA_WIDTH) newline();
     vga_update_cursor();

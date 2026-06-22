@@ -29,10 +29,11 @@ common_exception:
     pusha
     mov eax, [esp + 32]
     mov edx, [esp + 36]
+    push esp
     push edx
     push eax
     call exception_handler
-    add esp, 8
+    add esp, 12
     jmp common_iret
 
 common_iret:
@@ -69,10 +70,11 @@ irq_stub_%1:
     push dword 0
     push dword %1
     pusha
-    push dword %1
+    push esp
     push dword 0
+    push dword %1
     call exception_handler
-    add esp, 8
+    add esp, 12
     jmp common_iret
 %endmacro
 

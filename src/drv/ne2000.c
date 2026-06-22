@@ -144,7 +144,8 @@ static int ne2000_init(struct netdev *dev) {
 /* ── Send ── */
 static int ne2000_send(struct netdev *dev, const void *data, size_t len) {
     (void)dev;
-    uint16_t length = (uint16_t)len;
+    uint16_t data_len = (uint16_t)len;
+    uint16_t length = data_len;
 
     if (length < 60) length = 60;
     if (length > 1514) return -1;
@@ -165,8 +166,10 @@ static int ne2000_send(struct netdev *dev, const void *data, size_t len) {
     outb(IO + CR, CR_PAGE0 | CR_START | CR_DMAWRITE);
 
     /* Write packet data byte by byte */
-    for (uint16_t i = 0; i < length; i++)
+    for (uint16_t i = 0; i < data_len; i++)
         outb(IO + RDMA, ((const uint8_t *)data)[i]);
+    for (uint16_t i = data_len; i < length; i++)
+        outb(IO + RDMA, 0);
 
     /* Complete DMA */
     outb(IO + CR, CR_PAGE0 | CR_START | CR_NODMA);

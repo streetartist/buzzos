@@ -2,7 +2,10 @@
 #include <stdint.h>
 #include "gdt.h"
 #include "serial.h"
+#include "task.h"
 #include "user.h"
+
+extern tss32_t tss;
 
 enum {
     USER_TRAMPOLINE_BASE = 0x1FF000,
@@ -48,12 +51,19 @@ static uint32_t install_user_trampoline(uint32_t entry) {
 
 void user_enter(uint32_t entry, uint32_t stack_top) {
     uint32_t trampoline_entry = install_user_trampoline(entry);
+    uint32_t kernel_esp;
 
-    serial_puts("[user] enter entry=");
-    serial_puthex(entry);
-    serial_puts(" stack=");
-    serial_puthex(stack_top);
-    serial_puts("\n");
+    GNU_ASM("mov %%esp, %0" : "=r"(kernel_esp));
+    current_task->esp0 = kernel_esp;
+    tss.esp0 = kernel_esp;
+
+    if (!current_task->console_silent) {
+        serial_puts("[user] enter entry=");
+        serial_puthex(entry);
+        serial_puts(" stack=");
+        serial_puthex(stack_top);
+        serial_puts("\n");
+    }
 
     GNU_ASM(
         "pushl %0\n"

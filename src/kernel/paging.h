@@ -9,6 +9,11 @@
  * Then enable paging (CR0.PG) and jump-call to flush the TLB.
  * After this call, virtual == physical for the bottom 8 MiB. */
 void paging_init(void);
+uint32_t paging_current_cr3(void);
+uint32_t paging_kernel_cr3(void);
+void paging_switch(uint32_t cr3);
+uint32_t paging_create_user_space(void);
+void paging_destroy_user_space(uint32_t cr3);
 
 /* Page directory and table entry flags */
 enum {

@@ -1,61 +1,33 @@
-static int sys_open(const char *path) {
-    int fd;
-    __asm__ volatile(
-        "movl $2, %%eax\n"
-        "int  $0x80\n"
-        : "=a"(fd)
-        : "a"(2), "b"(path)
-        : "memory"
-    );
-    return fd;
+#include "libc.h"
+
+void worker(void) {
+    for (int i = 0; i < 5; i++) {
+        printf("[thread] tick %d\n", i);
+        yield();
+    }
+    exit(0);
 }
 
-static int sys_write(int fd, const char *buf, int len) {
-    int ret;
-    __asm__ volatile(
-        "movl $5, %%eax\n"
-        "int  $0x80\n"
-        : "=a"(ret)
-        : "a"(5), "b"(fd), "c"(buf), "d"(len)
-        : "memory"
-    );
-    return ret;
-}
+int main(int argc, char **argv) {
+    puts("=== BuzzOS Multithreading Demo ===");
+    printf("argc=%d argv0=%s\n", argc, argc > 0 ? argv[0] : "(none)");
+    for (int i = 1; i < argc; i++)
+        printf("arg%d=%s\n", i, argv[i]);
 
-static void sys_close(int fd) {
-    __asm__ volatile(
-        "movl $3, %%eax\n"
-        "int  $0x80\n"
-        :
-        : "a"(3), "b"(fd)
-        : "memory"
-    );
-}
+    /* Spawn a background thread */
+    int tid = spawn(worker);
+    printf("Spawned thread tid=%d\n", tid);
 
-static void sys_exit(int code) {
-    __asm__ volatile(
-        "movl $1, %%eax\n"
-        "int  $0x80\n"
-        :
-        : "a"(1), "b"(code)
-        : "memory"
-    );
-    __builtin_unreachable();
-}
-
-__attribute__((section(".text.entry")))
-void _start(void) {
-    int fd = sys_open("/dev/serial");
-    if (fd >= 0) {
-        sys_write(fd, "Hello via /dev/serial!\n", 23);
-        sys_close(fd);
+    /* Main thread also does work */
+    for (int i = 0; i < 5; i++) {
+        printf("[main]   tick %d\n", i);
+        yield();
     }
 
-    fd = sys_open("/dev/null");
-    if (fd >= 0) {
-        sys_write(fd, "this goes nowhere\n", 18);
-        sys_close(fd);
-    }
-
-    sys_exit(0);
+    /* Wait for thread to finish */
+    join(tid);
+    puts("Thread joined. Sleeping 10s...");
+    sleep_ms(10000);
+    puts("Done!");
+    return 0;
 }

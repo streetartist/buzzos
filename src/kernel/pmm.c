@@ -66,6 +66,16 @@ void pmm_init(void) {
     uintptr_t kernel_end   = (uintptr_t)&__bss_end + sizeof(bitmap);
     mark_range(kernel_start, kernel_end - kernel_start, 1);
 
+    /* boot.asm enters the kernel on a stack ending at 0x90000. Task 0 keeps
+     * using that stack, so PMM must never hand these pages to user mappings or
+     * later kernel stacks. */
+    mark_range(0x00080000, 0x00010000, 1);
+
+    /* User processes use 0x001C0000..0x00230000 as private virtual memory.
+     * Do not allocate physical kernel objects there, or those virtual
+     * addresses will alias user pages after a CR3 switch. */
+    mark_range(0x001C0000, 0x00230000 - 0x001C0000, 1);
+
     /* Reserve first 4 KiB (IVT / BDA) */
     mark_range(0, 0x1000, 1);
 

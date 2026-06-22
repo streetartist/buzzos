@@ -57,7 +57,7 @@ void timer_sleep_ms(uint32_t ms) {
      * 32-bit math throughout to avoid libgcc 64-bit division helpers. */
     uint32_t want = (ms / 1000u) * TIMER_HZ
                   + ((ms % 1000u) * TIMER_HZ + 999u) / 1000u;
-    uint32_t start = ticks;
-    while (ticks - start < want)
-        task_yield();
+    uint32_t end = ticks + want;
+    while ((int32_t)(ticks - end) < 0)
+        task_sleep_until(end);
 }
