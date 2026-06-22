@@ -1,0 +1,118 @@
+; === Exception / interrupt stub table =====================================
+bits 32
+section .text
+
+extern exception_handler
+extern syscall_handler
+
+; Stack layout before common_exception:
+;   no-error exceptions: [vector, error=0, cpu frame...]
+;   error exceptions:    [vector, cpu error, cpu frame...]
+; After pusha, vector is at [esp + 32] and error code at [esp + 36].
+
+%macro EXC_NOERR 1
+global exc_stub_%1
+exc_stub_%1:
+    push dword 0
+    push dword %1
+    jmp common_exception
+%endmacro
+
+%macro EXC_ERR 1
+global exc_stub_%1
+exc_stub_%1:
+    push dword %1
+    jmp common_exception
+%endmacro
+
+common_exception:
+    pusha
+    mov eax, [esp + 32]
+    mov edx, [esp + 36]
+    push edx
+    push eax
+    call exception_handler
+    add esp, 8
+    jmp common_iret
+
+common_iret:
+    popa
+    add esp, 8
+    iret
+
+EXC_NOERR 0
+EXC_NOERR 1
+EXC_NOERR 2
+EXC_NOERR 3
+EXC_NOERR 4
+EXC_NOERR 5
+EXC_NOERR 6
+EXC_NOERR 7
+EXC_ERR   8
+EXC_NOERR 9
+EXC_ERR   10
+EXC_ERR   11
+EXC_ERR   12
+EXC_ERR   13
+EXC_ERR   14
+EXC_NOERR 15
+EXC_NOERR 16
+EXC_ERR   17
+EXC_NOERR 18
+EXC_NOERR 19
+EXC_NOERR 20
+EXC_ERR   21
+
+%macro DUMMY_IRQ 1
+global irq_stub_%1
+irq_stub_%1:
+    push dword 0
+    push dword %1
+    pusha
+    push dword %1
+    push dword 0
+    call exception_handler
+    add esp, 8
+    jmp common_iret
+%endmacro
+
+extern keyboard_handler
+global irq_stub_33
+irq_stub_33:
+    pusha
+    xor eax, eax
+    in al, 0x60
+    push eax
+    call keyboard_handler
+    add esp, 4
+    mov al, 0x20
+    out 0x20, al
+    popa
+    iret
+
+; Timer IRQ (IRQ0 → INT 32): send EOI, call sched_tick, iret
+extern sched_tick
+global irq_stub_32
+irq_stub_32:
+    pusha
+    mov al, 0x20
+    out 0x20, al
+    call sched_tick
+    popa
+    iret
+%assign i 34
+%rep 14
+  DUMMY_IRQ i
+  %assign i i+1
+%endrep
+
+; syscall_stub saves the general-purpose register set as syscall_frame
+; and lets the C dispatcher update eax with the return value.
+global syscall_stub
+syscall_stub:
+    pusha
+    push esp
+    call syscall_handler
+    add esp, 4
+    popa
+    iret

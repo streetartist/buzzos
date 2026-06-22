@@ -1183,3 +1183,267 @@ gdb
 | `-s -S`                           | 启动 gdb server 在 1234 并暂停        |
 | `-m 32`                           | 限制 32 MiB 内存（强制暴露内存 bug）  |
 | `-monitor stdio`                  | 把 QEMU monitor 接到 stdin             |
+| `-device isa-debug-exit,iobase=0x501` | 内核写到端口 `0x501` 时 QEMU 退出（调试用）|
+
+---
+
+## 15. 串口（COM1）输出
+
+### 15.1 目标
+
+让内核在 VGA 屏幕之外，还能往 COM1 串口写字。**这一步几乎是调试基础设施里回报率最高的一步**——屏幕会在异常时黑掉，但串口消息已经发出去了。
+
+### 15.2 原理
+
+> **16550 UART** 是 PC 兼容机上的标准串口控制器。它映射到一组 I/O 端口（COM1 起始 `0x3F8`），E 内核通过 `inb`/`outb` 读写这几个端口来收发字符。
+
+在你有一个完整的 `printf` 之前，串口是**活体日志**：不管内核死在什么阶段（屏幕崩了、IDT 还没建），只要串口初始化过了，你就能看到最后一条消息。
+
+### 15.3 端口布局
+
+| 偏移  | DLAB=0  | DLAB=1  | 作用             |
+| ----- | ------- | ------- | ---------------- |
+| `+0`  | RBR/THR | DLL     | 数据 / 波特率低  |
+| `+1`  | IER     | DLM     | 中断使能 / 波特率高 |
+| `+2`  | FCR     | FCR     | FIFO 控制        |
+| `+3`  | LCR     | LCR     | 线控制           |
+| `+4`  | MCR     | MCR     | 调制解调器控制    |
+| `+5`  | LSR     | LSR     | 线状态            |
+
+> `DLAB` = LCR 的 bit7。置位后才能写波特率除数（DLL/DLM）；写完除数和 8N1 参数后，**必须 clear DLAB** 才能回到数据模式。
+
+### 15.4 I/O 端口访问原语
+
+POSI/O 端口操作必须用 `inb`/`outb` 指令，没有任何 C 语句可以直接发端口访问。C 代码里唯一的方式是**内联汇编**：
+
+```c
+static inline void outb(uint16_t port, uint8_t val) {
+    __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint8_t inb(uint16_t port) {
+    uint8_t ret;
+    __asm__ volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+```
+
+要点：
+- `volatile`：告诉编译器**别优化掉**端口读写——即使看起来没有作用。
+- `"Nd"(port)`：允许编译器传立即数（`0x3F8`）或寄存器，生成最更紧凑的 `outb`/`inb`。
+- `"a"(val)` / `"=a"(ret)`：`al`/`ax`/`eax` 是 `outb`/`inb` 的固定操作数寄存器。
+
+文件位置：[`src/kernel/io.h`](../src/kernel/io.h)。
+
+### 15.5 初始化序列
+
+对 16550 做最小初始化，只需要 4 步。参考代码在 [`src/kernel/serial.c`](../src/kernel/serial.c)：
+
+#### 15.5.1 关闭中断
+
+```c
+outb(COM1 + 1, 0x00);    // IER = 0，关所有中断
+```
+
+在 IDT 存在之前送出中断是找死——我们**先轮询**。
+
+#### 15.5.2 配置波特率与 8N1
+
+```c
+outb(COM1 + 3, 0x80);    // LCR：置 DLAB
+outb(COM1 + 0, 0x03);    // DLL = 3  → 38400 baud（115200 / 3）
+outb(COM1 + 1, 0x00);    // DLM = 0
+outb(COM1 + 3, 0x03);    // LCR：8 数据位，无校验，1 停止位，**清 DLAB**
+```
+
+#### 15.5.3 打开 FIFO
+
+```c
+outb(COM1 + 2, 0xC7);    // FIFO 使能、清空、14 字节阈值
+```
+
+#### 15.5.4 置位输出信号
+
+```c
+outb(COM1 + 4, 0x0B);    // MCR：DTR=1, RTS=1, OUT2=1
+```
+
+- `OUT2`：在 PC 架构上，**OUT2 控制中断能否从 UART 到达 8259 PIC**。即使你现在没开串口中断，先把线接通，后面开中断改一行就行。
+
+### 15.6 发送一个字符
+
+```c
+void serial_putc(char c) {
+    while ((inb(COM1 + 5) & 0x20) == 0) {   /* 等 THR 空 */ }
+    outb(COM1 + 0, (uint8_t)c);              /* 写数据 */
+}
+```
+
+- **LSR bit5**（THR Empty）表示“可以再发一个字节”。必须循环等它——16550 的 THR 是单字节 FIFO。
+- 发送 `'\n'` 时**也发 `'\r'`**，否则终端输出会走楼梯。
+
+### 15.7 在 QEMU 里看串口输出
+
+`Makefile` 的 `run` 目标已经加上 `-serial stdio`：
+
+```make
+run: $(IMAGE)
+	$(QEMU) -drive format=raw,file=$(IMAGE) -serial stdio -no-reboot
+```
+
+`-serial stdio` 把 QEMU 模拟的 COM1 接到你的终端 stdin/stdout。内核只要调了 `serial_puts(...)`，文字就会直接出现在你的控制台窗口。
+
+> 如果串口死活没输出，排查顺序：
+> 1. **DLAB 有没有清？** LCR 写 `0x03` 那一步**必须清 bit7**。
+> 2. **IER 关了没？** 写 `0x00` 到 `COM1+1`。
+> 3. **BIOS/SeaBIOS 是否已初始化 COM1？** QEMU 的 BIOS 默认会设好 38400 8N1。**不要假设它设了**——内核应该自己做。
+> 4. **用 `-serial file:build/serial.log` 把输出导到文件**，排除终端缓冲问题。
+
+### 15.8 新增文件一览
+
+这一阶段仓库多出几个文件：
+
+| 文件                         | 角色                                               |
+| ---------------------------- | -------------------------------------------------- |
+| `src/kernel/io.h`            | `inb`/`outb`/`inw`/`outw`/`io_wait` 端口访问原语  |
+| `src/kernel/serial.h`        | 串口初始化与输出接口                                |
+| `src/kernel/serial.c`        | `serial_init` / `serial_putc` / `serial_puts` / `serial_puthex` |
+| `src/kernel/vga.h`           | VGA 文本模式接口（原 `kernel.c` 独立出来）           |
+| `src/kernel/vga.c`           | `vga_init` / `vga_clear` / `vga_putc` / `vga_puts` / `vga_set_color` |
+| `src/kernel/kernel.c`        | 内核入口（现在只 40 行，仅调模块）                  |
+
+`Makefile` 的 `KERNEL_SRCS` 列表也已扩充——新增 `.c` 文件只需要加一行，构建链自动接上。
+
+### 15.9 验证
+
+```powershell
+make run
+```
+
+期望输出（终端控制台）：
+
+```text
+SeaBIOS (version ...)
+...
+Booting from Hard Disk...
+BuzzOS boot
+[boot] serial online
+[boot] screen painted, entering idle loop
+```
+
+同时 QEMU 图形窗口的 VGA 屏幕上应该看到：
+
+```text
+BuzzOS
+minimal i686 kernel
+
+next: memory, syscalls, ELF, VFS, framebuffer
+
+[serial also live on COM1 @ 38400 8N1]
+```
+
+> 两路输出（VGA + 串口）现在都活了。这意味着：**从这一步开始，你不再需要“盯着图形窗口等崩溃”——日志已经在你的终端里了。**
+
+### 15.10 常见坑
+
+| 现象                             | 原因                                                                  |
+| -------------------------------- | --------------------------------------------------------------------- |
+| 串口完全没输出                   | DLAB 没清，数据寄存器仍在"波特率"模式；或 FIFO 设错了写入被缓冲        |
+| 输出走楼梯（换行没错）           | `serial_putc('\n')` 没配 `'\r'`                                        |
+| 前几个字符丢了                   | FIFO 没清；初始化前 `outb(COM1+2, 0xC7)` 没加                          |
+| `make run` 报 command not found  | QEMU 不在 PATH；修改 Makefile 的 `QEMU` 变量指向完整路径               |
+| "Booting from Hard Disk" 后黑屏 | 内核超过 48 扇区加载上限（`KERNEL_SECTORS := 48`），见 §10.6            |
+
+### 15.11 串口调试的"护身符"效果
+
+因为 `_start` 的**第一件事**就是 `serial_init()` + `serial_puts("[boot] serial online\n")`，只要 QEMU 能跑完 SeaBIOS 初始化和 CHS 读盘，你就能看到这条消息——**不管屏幕、IDT、GDT 等其他组件是否已坏**。
+
+后面加中断处理、分页、ELF 加载时，这种“在一切外部依赖之前先报平安”的写法会把调试时间缩短一个数量级。
+
+> 下一个要补的能力是 **GDT 初始化封装**（把 GDT 搬进 C，为 TSS / 用户态做准备）——教程 `§13` 第 2 项。
+
+
+---
+
+## 16. GDT 搬进 C
+
+### 16.1 目标
+
+把 GDT 的定义和控制权从汇编启动扇区移到 C 代码里。启动扇区只保留一个“能切到保护模式”的最小临时 GDT；内核一启动就用 `lgdt` 换上自己那套。
+
+### 16.2 原理
+
+> OS 启动链在 GDT 上做了两步：第一步，启动扇区用一个临时 GDT 完成保护模式切换；第二步，内核用正式的 GDT 接管。这两套 GDT 一开始完全一样，但后面给内核的 GDT **原地加条目**（TSS、用户段等）不会影响启动扇区。
+
+正式 GDT 放在 C 里，定义成 `gdt_entry_t` 结构体数组，强制放在独立的 `.gdt.bootstrap` 链接段（方便 objdump 验证布局）。`gdt_install()` 在运行时填好 `gdt_ptr`（`lgdt` 要的 6 字节结构），然后调 `lgdt` 加载。
+
+### 16.3 代码
+
+[`src/kernel/gdt.h`](../src/kernel/gdt.h) 定义描述符结构、访问字节常量和选择子：
+
+```c
+struct gdt_entry {
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t  base_mid;
+    uint8_t  access;
+    uint8_t  granularity;
+    uint8_t  base_high;
+} __attribute__((packed));
+```
+
+[`src/kernel/gdt.c`](../src/kernel/gdt.c) 定义实际 GDT：
+
+```c
+gdt_entry_t boot_gdt[4] = {
+    /* NULL */
+    { 0, 0, 0, 0, 0, 0 },
+    /* code32: 0..4 GiB */
+    { 0xFFFF, 0, 0,
+      GDT_ACCESS_PRESENT | GDT_ACCESS_DPL0 | GDT_ACCESS_CODE,
+      GDT_GRAN_4K | GDT_GRAN_32BIT | 0x0F, 0 },
+    /* data32: 0..4 GiB */
+    { 0xFFFF, 0, 0,
+      GDT_ACCESS_PRESENT | GDT_ACCESS_DPL0 | GDT_ACCESS_DATA,
+      GDT_GRAN_4K | GDT_GRAN_32BIT | 0x0F, 0 },
+    /* code16 — 预留给 v86 / BIOS 调用 */
+    { 0xFFFF, 0, 0,
+      GDT_ACCESS_PRESENT | GDT_ACCESS_DPL0 | GDT_ACCESS_CODE,
+      0x0F, 0 },
+};
+```
+
+> 第四个条目（code16）暂时不用，但加上之后**布局就定了**——后面加 TSS 不会打乱索引。
+
+### 16.4 运行时安装
+
+`gdt_install()` 在三步：
+1. 填 `gdt_ptr.limit` 和 `gdt_ptr.base`
+2. 用 `lgdt %0`（内联汇编）加载到 GDTR
+3. 暂不重载段寄存器（新旧 GDT 的数据段完全一样；后续加 TSS/用户段时再补上重载步骤）
+
+内核入口 `_start` 调用顺序现在是：
+```
+zero_bss → serial_init → gdt_install → vga_init → … → halt loop
+```
+
+### 16.5 验证
+
+```powershell
+make run
+```
+
+串口输出应为：
+
+```text
+[boot] gdt installed
+```
+
+同时可用 `llvm-objdump -s -j .gdt.bootstrap build/.../kernel.elf` 查看 GDT 字节布局，应与 §6 的启动扇区 GDT 完全一致。
+
+### 16.6 为什么选择“两步”而不是一步
+
+如果让启动扇区直接 `lgdt [kernel_gdt_ptr]`，必须保证 `kernel_gdt_ptr` 在编译时就有确定地址。这对于裸机项目（没有标准链接模型）极其脆弱——每次改 `.text` 布局，偏移就会漂移。两步法（启动扇区保留临时 GDT）是 Linux / BSD 等系统的一致做法，对教学项目也更稳。
+
+> 下一步是 **IDT + 中断处理**——让 `#GP` / `#PF` 不再是黑屏。
+

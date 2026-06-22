@@ -33,12 +33,12 @@ Tutorial: [`docs/tutorial.md`](docs/tutorial.md) (Chinese, 14 chapters from tool
 - [x] freestanding C kernel entry
 - [x] `.bss` zeroing
 - [x] VGA text-mode output
-- [ ] Serial (COM1) output
-- [ ] IDT + interrupt handling
-- [ ] Physical memory manager (E820 + bitmap / free list)
-- [ ] Paging / virtual memory
-- [ ] ELF loader
-- [ ] Processes and scheduling
+- [x] Serial (COM1) output (`inb`/`outb`, `serial_init`/`serial_putc`/`serial_puts`)
+- [x] IDT + interrupt handling (14 exception types: #GP, #PF, #DE, #UD, ...)
+- [x] 8259 PIC remap + keyboard IRQ stub
+- [x] Physical memory manager (E820 + bitmap allocator)
+- [x] Paging / virtual memory (identity 0-8MiB + higher-half at 0xC0000000)
+- [x] ELF loader (parse ELF32 headers + load segments)
 - [ ] System calls
 - [ ] VFS (ramfs / devfs)
 - [ ] Framebuffer graphics

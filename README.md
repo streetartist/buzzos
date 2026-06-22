@@ -33,12 +33,12 @@ English：[README.en.md](README.en.md)
 - [x] freestanding C 内核入口
 - [x] `.bss` 清零
 - [x] VGA 文本模式输出
-- [ ] 串口（COM1）输出
-- [ ] IDT + 中断处理
-- [ ] 物理内存管理（E820 + bitmap / 空闲链表）
-- [ ] 分页 / 虚拟内存
-- [ ] ELF 加载器
-- [ ] 进程与调度
+- [x] 串口（COM1）输出（`inb/outb`、`serial_init`/`serial_putc`/`serial_puts`）
+- [x] IDT + 中断处理（`#GP`/`#PF`/`#DE`/`#UD` 等 14 种异常）
+- [x] 8259 PIC 重映射 + 键盘 IRQ stub
+- [x] 物理内存管理（E820 + bitmap 分配器）
+- [x] 分页 / 虚拟内存（identity 0-8MiB + higher-half 0xC0000000）
+- [x] ELF 加载器（解析 ELF32 + 载入段）
 - [ ] 系统调用
 - [ ] VFS（ramfs / devfs）
 - [ ] framebuffer 图形输出
