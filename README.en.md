@@ -4,11 +4,11 @@ BuzzOS is a minimal i386 POSIX-like operating system for learning and experiment
 
 Chinese main README: [README.md](README.md)
 
-![image-20260623000416138](.\pic\demo1.png)
+![image-20260623000416138](/pic/demo1.png)
 
-![image-20260623000538562](.\pic\demo2.png)
+![image-20260623000538562](/pic/demo2.png)
 
-![image-20260623000641242](.\pic\demo3.png)
+![image-20260623000641242](/pic/demo3.png)
 
 ## Current Features
 
