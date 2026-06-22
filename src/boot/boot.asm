@@ -1,5 +1,6 @@
-%define KERNEL_LOAD_ADDR 0x1000
-%define KERNEL_SECTORS 48
+%define KERNEL_FINAL_ADDR 0x1000
+%define KERNEL_HIGH_SEG   0x1000   ; ES segment → physical 0x10000
+%define KERNEL_SECTORS    96       ; up to 48 KiB, safe at 0x10000
 
 bits 16
 org 0x7c00
@@ -37,16 +38,15 @@ start:
     jne .e820_loop
 .e820_done:
 
-    mov ah, 0x02
-    mov al, KERNEL_SECTORS
-    mov ch, 0
-    mov cl, 2
-    mov dh, 0
+    ; Load kernel via LBA extended read to physical 0x10000 (above bootloader).
+    ; This avoids both the CHS track-boundary limit and the 0x7C00 self-overwrite.
+    mov si, dap
     mov dl, [drive]
-    mov bx, KERNEL_LOAD_ADDR
+    mov ah, 0x42
     int 0x13
     jc .disk_error
 
+    ; Enable A20
     in al, 0x92
     or al, 2
     out 0x92, al
@@ -77,6 +77,16 @@ print:
 drive       db 0
 loading_msg db "BuzzOS boot", 13, 10, 0
 err_msg     db "Disk error", 13, 10, 0
+
+; Disk Address Packet for int 13h/42h (LBA extended read)
+align 4
+dap:
+    db 0x10                  ; packet size (16 bytes)
+    db 0                     ; reserved
+    dw KERNEL_SECTORS        ; number of sectors to read
+    dw 0x0000                ; dest offset  (0x1000:0x0000 = phys 0x10000)
+    dw KERNEL_HIGH_SEG       ; dest segment
+    dq 1                     ; starting LBA (boot sector = LBA 0, kernel = LBA 1)
 
 ; GDT: 6 entries (NULL, kcode32, kdata32, ucode32, udata32, TSS)
 gdt_start:
@@ -124,9 +134,6 @@ gdt_desc:
 
 CODE_SEG  equ 0x08
 DATA_SEG  equ 0x10
-UCODE_SEG equ 0x1B
-UDATA_SEG equ 0x23
-TSS_SEG   equ 0x28
 
 bits 32
 protected_start:
@@ -137,7 +144,28 @@ protected_start:
     mov gs, ax
     mov ss, ax
     mov esp, 0x90000
-    jmp KERNEL_LOAD_ADDR
+
+    ; The rep movsd below copies data OVER the boot sector at 0x7C00 (where
+    ; this code lives), so we first relocate a position-independent copy
+    ; routine to 0x600 and jump there.
+    mov esi, .copy_stub
+    mov edi, 0x600
+    mov ecx, (.copy_stub_end - .copy_stub + 3) / 4
+    cld
+    rep movsd
+    mov eax, 0x600
+    jmp eax
+
+; Position-independent stub — uses only absolute moves and indirect jump.
+.copy_stub:
+    mov esi, 0x10000
+    mov edi, 0x1000
+    mov ecx, (KERNEL_SECTORS * 512) / 4
+    cld
+    rep movsd
+    mov eax, 0x1000
+    jmp eax
+.copy_stub_end:
 
 times 510 - ($ - $$) db 0
 dw 0xaa55

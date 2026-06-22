@@ -2,7 +2,7 @@ BUILD := build
 BUILD_ID := $(shell powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()")
 OBJDIR := $(BUILD)/obj/$(BUILD_ID)
 IMAGE := $(BUILD)/buzzos.img
-KERNEL_SECTORS := 48
+KERNEL_SECTORS := 96
 
 KERNEL_SRCS := \
 	src/kernel/kernel.c \
@@ -18,6 +18,7 @@ KERNEL_SRCS := \
 	src/kernel/syscall.c \
 	src/kernel/vfs.c \
 	src/kernel/keyboard.c \
+	src/kernel/timer.c \
 	src/kernel/shell.c \
 	src/kernel/netdev.c \
 	src/kernel/net.c

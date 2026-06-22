@@ -70,4 +70,48 @@ void net_status(void);
 extern uint8_t  net_mac[6];
 extern uint32_t net_ip;
 
+/* UDP header */
+struct udp_hdr {
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint16_t length;
+    uint16_t checksum;
+} __attribute__((packed));
+
+/* TCP header */
+struct tcp_hdr {
+    uint16_t src_port;
+    uint16_t dst_port;
+    uint32_t seq;
+    uint32_t ack;
+    uint8_t  data_off;
+    uint8_t  flags;
+    uint16_t window;
+    uint16_t checksum;
+    uint16_t urg_ptr;
+} __attribute__((packed));
+
+#define TCP_FIN 0x01
+#define TCP_SYN 0x02
+#define TCP_RST 0x04
+#define TCP_PSH 0x08
+#define TCP_ACK 0x10
+
+/* Resolve hostname to IP via DNS (QEMU DNS proxy at 10.0.2.3:53).
+ * Returns 0 on success, -1 on failure. */
+int  net_dns_resolve(const char *hostname, uint32_t *ip_out);
+
+/* Minimal TCP client — single connection at a time. */
+int  net_tcp_connect(uint32_t ip, uint16_t port);
+int  net_tcp_send(const void *data, size_t len);
+int  net_tcp_recv(void *buf, size_t max);
+void net_tcp_close(void);
+
+/* HTTP GET — resolves host, connects to port 80, sends GET / HTTP/1.0,
+ * prints response via putc. */
+int  net_wget(const char *host, void (*putc)(char));
+
+/* DHCP — perform DISCOVER/OFFER/REQUEST/ACK to obtain an IP address.
+ * Updates net_ip on success. Returns 0 or -1. */
+int  net_dhcp(void);
 #endif

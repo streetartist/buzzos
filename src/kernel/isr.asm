@@ -90,14 +90,16 @@ irq_stub_33:
     popa
     iret
 
-; Timer IRQ (IRQ0 → INT 32): send EOI, call sched_tick, iret
-extern sched_tick
+; Timer IRQ (IRQ0 → INT 32): send EOI, call timer_irq, iret.
+; EOI is sent BEFORE the handler so the (possibly long-running) context
+; switch inside timer_irq does not block further timer interrupts.
+extern timer_irq
 global irq_stub_32
 irq_stub_32:
     pusha
     mov al, 0x20
     out 0x20, al
-    call sched_tick
+    call timer_irq
     popa
     iret
 %assign i 34

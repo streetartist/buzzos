@@ -154,7 +154,112 @@ static const struct vnode_ops null_dev_ops = {
 };
 
 /* ------------------------------------------------------------------ */
-/*  VFS open / read / write / close                                     */
+/*  Writable ramfs files                                                */
+/* ------------------------------------------------------------------ */
+
+#define WFILE_MAX    16
+#define WFILE_BUFSZ  512
+#define WFILE_NAMELEN 32
+
+struct wfile {
+    char    name[WFILE_NAMELEN];
+    uint8_t data[WFILE_BUFSZ];
+    size_t  size;
+    int     used;
+};
+
+static struct wfile wfiles[WFILE_MAX];
+
+static struct wfile *wfile_find(const char *name) {
+    for (int i = 0; i < WFILE_MAX; i++) {
+        if (!wfiles[i].used) continue;
+        const char *a = name, *b = wfiles[i].name;
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (*a == 0 && *b == 0) return &wfiles[i];
+    }
+    return 0;
+}
+
+static struct wfile *wfile_alloc(void) {
+    for (int i = 0; i < WFILE_MAX; i++)
+        if (!wfiles[i].used) return &wfiles[i];
+    return 0;
+}
+
+int vfs_create(const char *path) {
+    if (wfile_find(path)) return 0;  /* already exists */
+    struct wfile *wf = wfile_alloc();
+    if (!wf) return -1;
+    int i = 0;
+    while (path[i] && i < WFILE_NAMELEN - 1) { wf->name[i] = path[i]; i++; }
+    wf->name[i] = 0;
+    wf->size = 0;
+    wf->used = 1;
+    return 0;
+}
+
+int vfs_write_file(const char *path, const void *data, size_t len) {
+    struct wfile *wf = wfile_find(path);
+    if (!wf) {
+        if (vfs_create(path) < 0) return -1;
+        wf = wfile_find(path);
+    }
+    /* Append, capped at buffer size */
+    const uint8_t *src = (const uint8_t *)data;
+    for (size_t i = 0; i < len && wf->size < WFILE_BUFSZ; i++)
+        wf->data[wf->size++] = src[i];
+    return 0;
+}
+
+int vfs_remove(const char *path) {
+    struct wfile *wf = wfile_find(path);
+    if (!wf) return -1;
+    wf->used = 0;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  vnode ops for writable ramfs                                        */
+/* ------------------------------------------------------------------ */
+
+struct wfile_stream {
+    struct wfile *wf;
+    size_t pos;
+};
+
+static int wfile_open(vnode_t *vn)  { (void)vn; return 0; }
+static int wfile_close(vnode_t *vn) { (void)vn; return 0; }
+
+static int wfile_read(vnode_t *vn, void *buf, size_t count) {
+    struct wfile_stream *s = (struct wfile_stream *)vn->data;
+    if (!s->wf || s->pos >= s->wf->size) return 0;
+    size_t n = s->wf->size - s->pos;
+    if (n > count) n = count;
+    for (size_t i = 0; i < n; i++)
+        ((uint8_t *)buf)[i] = s->wf->data[s->pos + i];
+    s->pos += n;
+    return (int)n;
+}
+
+static int wfile_write(vnode_t *vn, const void *buf, size_t count) {
+    struct wfile_stream *s = (struct wfile_stream *)vn->data;
+    if (!s->wf) return -1;
+    const uint8_t *src = (const uint8_t *)buf;
+    size_t written = 0;
+    for (size_t i = 0; i < count && s->wf->size < WFILE_BUFSZ; i++) {
+        s->wf->data[s->wf->size++] = src[i];
+        written++;
+    }
+    return (int)written;
+}
+
+static const struct vnode_ops wfile_ops = {
+    .open  = wfile_open,
+    .read  = wfile_read,
+    .write = wfile_write,
+    .close = wfile_close,
+};
+
 /* ------------------------------------------------------------------ */
 
 static int alloc_fd(vnode_t *vn) {
@@ -203,6 +308,25 @@ int vfs_open(const char *path) {
         return alloc_fd(vn);
     }
 
+    /* writable file lookup */
+    struct wfile *wf = wfile_find(path);
+    if (wf) {
+        static struct wfile_stream wstreams[16];
+        static int wi = 0;
+        struct wfile_stream *ws = &wstreams[wi++ % 16];
+        ws->wf  = wf;
+        ws->pos = 0;
+
+        static vnode_t wfile_vnodes[16];
+        static int wvi = 0;
+        vnode_t *wvn = &wfile_vnodes[wvi++ % 16];
+        wvn->name = path;
+        wvn->ops  = &wfile_ops;
+        wvn->data = ws;
+        wvn->ops->open(wvn);
+        return alloc_fd(wvn);
+    }
+
     return -1;
 }
 
@@ -243,6 +367,11 @@ void vfs_ls(void (*putc)(char)) {
     while (*s) putc(*s++);
     for (int i = 0; i < ramfs_count; i++) {
         const char *n = ramfs_files[i].name;
+        putc('\n'); while (*n) putc(*n++);
+    }
+    for (int i = 0; i < WFILE_MAX; i++) {
+        if (!wfiles[i].used) continue;
+        const char *n = wfiles[i].name;
         putc('\n'); while (*n) putc(*n++);
     }
     putc('\n');

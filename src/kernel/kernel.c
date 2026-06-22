@@ -9,6 +9,7 @@
 #include "serial.h"
 #include "syscall.h"
 #include "task.h"
+#include "timer.h"
 #include "vfs.h"
 #include "vga.h"
 
@@ -36,6 +37,7 @@ void _start(void) {
     vga_set_color(0x0F, 0x00);
 
     sched_init();
+    timer_init();
     task_create(shell_task, "shell");
     serial_puts("[boot] shell started\n");
     for (;;) { task_yield(); }

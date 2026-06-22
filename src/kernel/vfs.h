@@ -44,6 +44,11 @@ int  vfs_close(int fd);
 /* Register a ramfs file. Data is referenced (not copied). */
 void ramfs_register(const char *name, const uint8_t *data, size_t size);
 
+/* Writable ramfs operations */
+int  vfs_create(const char *path);                        /* touch */
+int  vfs_write_file(const char *path, const void *data, size_t len); /* append */
+int  vfs_remove(const char *path);                        /* rm */
+
 /* Initialise VFS and built-in filesystems. */
 void vfs_init(void);
 
