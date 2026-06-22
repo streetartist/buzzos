@@ -20,6 +20,7 @@ enum {
     IPPROTO_ICMP_K  = 1,
     IPPROTO_UDP_K   = 17,
     MAX_SOCKETS     = 8,
+    MAX_FUTEX_WAITERS = 32,
 };
 
 struct k_sockaddr_in {
@@ -44,6 +45,16 @@ static struct socket_entry sockets[MAX_SOCKETS];
 static volatile int socket_locked;
 static int active_tcp_socket = -1;
 
+struct futex_waiter {
+    int used;
+    int task_id;
+    uint32_t addr;
+    int woken;
+};
+
+static struct futex_waiter futex_waiters[MAX_FUTEX_WAITERS];
+static volatile int futex_locked;
+
 static uint16_t ntoh16(uint16_t v) {
     return (uint16_t)((v << 8) | (v >> 8));
 }
@@ -55,6 +66,15 @@ static void socket_lock(void) {
 
 static void socket_unlock(void) {
     __sync_lock_release(&socket_locked);
+}
+
+static void futex_lock(void) {
+    while (__sync_lock_test_and_set(&futex_locked, 1))
+        task_yield();
+}
+
+static void futex_unlock(void) {
+    __sync_lock_release(&futex_locked);
 }
 
 static int socket_owner(void) {
@@ -528,6 +548,71 @@ static int sys_netinfo(uint32_t mac_arg, uint32_t ip_arg, uint32_t c, uint32_t d
     return 0;
 }
 
+static int sys_pipe(uint32_t fds_arg, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (!user_range_ok(fds_arg, sizeof(int) * 2))
+        return -1;
+    return vfs_pipe((int *)(uintptr_t)fds_arg);
+}
+
+static int sys_futex_wait(uint32_t addr_arg, uint32_t expected, uint32_t c, uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (!user_range_ok(addr_arg, sizeof(int)))
+        return -1;
+    volatile int *addr = (volatile int *)(uintptr_t)addr_arg;
+    if (*addr != (int)expected)
+        return 0;
+
+    int slot = -1;
+    futex_lock();
+    for (int i = 0; i < MAX_FUTEX_WAITERS; i++) {
+        if (!futex_waiters[i].used) {
+            slot = i;
+            futex_waiters[i].used = 1;
+            futex_waiters[i].task_id = current_task ? current_task->id : 0;
+            futex_waiters[i].addr = addr_arg;
+            futex_waiters[i].woken = 0;
+            break;
+        }
+    }
+    futex_unlock();
+    if (slot < 0)
+        return -1;
+
+    for (;;) {
+        int woken;
+        futex_lock();
+        woken = futex_waiters[slot].woken;
+        futex_unlock();
+        if (woken || *addr != (int)expected)
+            break;
+        task_yield();
+    }
+
+    futex_lock();
+    futex_waiters[slot].used = 0;
+    futex_unlock();
+    return 0;
+}
+
+static int sys_futex_wake(uint32_t addr_arg, uint32_t count, uint32_t c, uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (!user_range_ok(addr_arg, sizeof(int)))
+        return -1;
+    int woke = 0;
+    futex_lock();
+    for (int i = 0; i < MAX_FUTEX_WAITERS; i++) {
+        if (futex_waiters[i].used && futex_waiters[i].addr == addr_arg && !futex_waiters[i].woken) {
+            futex_waiters[i].woken = 1;
+            woke++;
+            if (count && woke >= (int)count)
+                break;
+        }
+    }
+    futex_unlock();
+    return woke;
+}
+
 static int streq(const char *a, const char *b) {
     while (*a && *b && *a == *b) {
         a++;
@@ -567,8 +652,9 @@ static void thread_trampoline(void) {
 }
 
 static int sys_spawn(uint32_t func_addr, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
-    (void)b; (void)c; (void)d; (void)e;
-    if (!user_range_ok(func_addr, 1))
+    (void)c; (void)d; (void)e;
+    uint32_t return_addr = b;
+    if (!user_range_ok(func_addr, 1) || !user_range_ok(return_addr, 1))
         return -1;
     int owner = current_task ? current_task->fd_owner : 0;
     if (owner < 0 || owner >= MAX_TASKS)
@@ -576,8 +662,10 @@ static int sys_spawn(uint32_t func_addr, uint32_t b, uint32_t c, uint32_t d, uin
 
     int slot = ++process_thread_count[owner];
     uint32_t user_stack = USER_DEFAULT_STACK_TOP - (uint32_t)(slot * 0x4000);
-    if (user_stack < 0x001C0000)
+    if (user_stack < 0x001C0004)
         return -1;
+    user_stack -= 4;
+    *(uint32_t *)(uintptr_t)user_stack = return_addr;
 
     __asm__ volatile("cli");
     int id = task_create(thread_trampoline, "user_thread");
@@ -705,6 +793,9 @@ void syscall_init(void) {
     syscall_table[SYS_SENDTO] = sys_sendto;
     syscall_table[SYS_RECVFROM] = sys_recvfrom;
     syscall_table[SYS_NETINFO] = sys_netinfo;
+    syscall_table[SYS_PIPE] = sys_pipe;
+    syscall_table[SYS_FUTEX_WAIT] = sys_futex_wait;
+    syscall_table[SYS_FUTEX_WAKE] = sys_futex_wake;
     syscall_table[SYS_SPAWN] = sys_spawn;
     syscall_table[SYS_YIELD] = sys_yield;
     syscall_table[SYS_JOIN]  = sys_join;

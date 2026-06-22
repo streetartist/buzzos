@@ -2,6 +2,8 @@
 
 #define LINE_MAX 128
 
+static int futex_demo_word;
+
 static int starts_with(const char *s, const char *p) {
     while (*p) {
         if (*s++ != *p++)
@@ -111,7 +113,7 @@ static int read_line(char *line, int size) {
 }
 
 static void cmd_help(void) {
-    puts("ls cd pwd stat cat mkdir rmdir touch write rm mv ping wget dhcp exec wait kill ps echo sleep reboot help");
+    puts("ls cd pwd stat cat mkdir rmdir touch write rm mv ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help");
 }
 
 static void cmd_ls(const char *path) {
@@ -440,6 +442,50 @@ static void cmd_dhcp(void) {
     closesocket(sd);
 }
 
+static void cmd_pipetest(void) {
+    int fds[2];
+    if (pipe(fds) < 0) {
+        puts("pipe: failed");
+        return;
+    }
+    const char *msg = "hello through pipe";
+    if (write(fds[1], msg, strlen(msg)) < 0) {
+        puts("pipe: write failed");
+        close(fds[0]);
+        close(fds[1]);
+        return;
+    }
+    char buf[64];
+    int n = read(fds[0], buf, sizeof(buf) - 1);
+    if (n < 0) {
+        puts("pipe: read failed");
+    } else {
+        buf[n] = 0;
+        printf("pipe: %s\n", buf);
+    }
+    close(fds[0]);
+    close(fds[1]);
+}
+
+static void futex_demo_thread(void) {
+    sleep_ms(200);
+    futex_demo_word = 1;
+    futex_wake(&futex_demo_word, 1);
+}
+
+static void cmd_futextest(void) {
+    futex_demo_word = 0;
+    int tid = spawn(futex_demo_thread);
+    if (tid < 0) {
+        puts("futex: spawn failed");
+        return;
+    }
+    while (futex_demo_word == 0)
+        futex_wait(&futex_demo_word, 0);
+    join(tid);
+    puts("futex: woke");
+}
+
 static void execute(char *line) {
     trim_right(line);
     if (!line[0])
@@ -457,6 +503,8 @@ static void execute(char *line) {
     else if (starts_with(line, "ping ")) cmd_ping(line + 5);
     else if (starts_with(line, "wget ")) cmd_sockget(line + 5);
     else if (starts_with(line, "dhcp")) cmd_dhcp();
+    else if (starts_with(line, "pipetest")) cmd_pipetest();
+    else if (starts_with(line, "futextest")) cmd_futextest();
     else if (starts_with(line, "mkdir ")) {
         if (mkdir(line + 6) < 0) puts("mkdir: failed");
     } else if (starts_with(line, "rmdir ")) {

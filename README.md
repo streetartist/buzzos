@@ -1,107 +1,175 @@
 # BuzzOS
 
-一个最小可启动的 i386 操作系统骨架。目标是先跑通最小闭环，再一层一层把内存管理、进程、ELF、文件系统、图形、用户态补起来。
+BuzzOS 是一个面向学习和实验的极简 i386 POSIX-like 操作系统。它已经不只是启动骨架：当前版本有用户态 shell、多任务、系统调用、VFS、一个简单落盘文件系统、基础 TCP/UDP/ICMP socket、pipe 和 futex 风格同步接口。
 
-```text
-BIOS -> boot sector -> protected mode -> C kernel -> VGA text output
-```
+English: [README.en.md](README.en.md)
 
-跑起来后 QEMU 输出：
+![image-20260623000416138](.\pic\demo1.png)
 
-```text
-BuzzOS
-minimal i686 kernel
+![image-20260623000538562](.\pic\demo2.png)
 
-next: memory, syscalls, ELF, VFS, framebuffer
-```
+![image-20260623000641242](.\pic\demo3.png)
 
-> **这个仓库是教学项目，不会停在"最小闭环"上。**
-> 长期目标是一条从裸机到能在用户态跑 `gcc` 编译出来的 C 程序的完整路径。`docs/tutorial.md` 会按这条路径的每一个阶段补章节；每加一节能力，README 这里也会更新"已实现"清单。
-> 现在还很薄——这正是它的形态，不是它的终点。
+## 当前能力
 
-教程：[`docs/tutorial.md`](docs/tutorial.md)（中文，从工具链到 QEMU 验证共 14 章）
-English：[README.en.md](README.en.md)
-
----
-
-## 已实现 / 计划中
-
-- [x] BIOS 启动扇区签名校验
-- [x] 启动扇区从磁盘读内核到 `0x1000`
-- [x] A20 打开
-- [x] GDT + 32 位保护模式
-- [x] freestanding C 内核入口
-- [x] `.bss` 清零
-- [x] VGA 文本模式输出
-- [x] 串口（COM1）输出（`inb/outb`、`serial_init`/`serial_putc`/`serial_puts`）
-- [x] IDT + 中断处理（`#GP`/`#PF`/`#DE`/`#UD` 等 14 种异常）
-- [x] 8259 PIC 重映射 + 键盘 IRQ stub
-- [x] 物理内存管理（E820 + bitmap 分配器）
-- [x] 分页 / 虚拟内存（identity 0-8MiB + higher-half 0xC0000000）
-- [x] ELF 加载器（解析 ELF32 + 载入段）
-- [ ] 系统调用
-- [ ] VFS（ramfs / devfs）
-- [ ] framebuffer 图形输出
-- [ ] 用户态 + 加载用户程序
-
-清单每完成一项，对应教程章节就会加一节"这是怎么工作的"。详见 [`docs/tutorial.md`](docs/tutorial.md) §13。
-
----
+- 16 位 BIOS 启动扇区，进入 32 位保护模式。
+- GDT、IDT、异常处理、PIC、PIT timer、键盘输入、VGA 文本输出、串口输出。
+- E820 物理内存探测、bitmap PMM、分页、用户态地址空间。
+- ELF32 用户程序加载，用户态 `/bin/sh` shell。
+- 抢占式任务调度，进程/线程模型，`spawn`、`join`、`sleep`、`waitpid`、`kill`。
+- 系统调用 ABI：文件、进程、目录、网络、IPC、同步等基础接口。
+- VFS + mount table：
+  - `/`：initrd/ramfs，包含 `/hello` 和 `/bin/sh`
+  - `/dev`：`console`、`serial`、`null`
+  - `/fs`：mini ext-like 落盘文件系统
+- mini 文件系统：
+  - 目录、普通文件、`mkdir`、`rmdir`、`unlink`、`rename`
+  - `stat`、`getdents`、`open(O_CREAT/O_TRUNC/O_APPEND)`、`lseek`
+  - 固定磁盘区域，默认重建镜像时保留 `/fs`
+- 块设备层：
+  - ATA PIO 扇区读写
+  - 简单 write-through block cache
+- 网络：
+  - NE2000/QEMU user-mode network
+  - DHCP 初始化、DNS、TCP client、UDP datagram、ICMP echo
+  - 用户态 socket API：`socket/connect/send/recv/bind/sendto/recvfrom`
+- IPC/同步：
+  - `pipe(int fds[2])`
+  - `futex_wait` / `futex_wake`
 
 ## 构建与运行
 
-工具链：
+需要这些工具：
 
-| 工具               | 用途                              | 必需 |
-| ------------------ | --------------------------------- | ---- |
-| `nasm`             | 汇编启动扇区                       | 必需 |
-| `clang`            | 编译 freestanding C 内核           | 必需 |
-| `ld.lld`           | 链接 ELF                          | 必需 |
-| `llvm-objcopy`     | ELF → 纯二进制内核                 | 必需 |
-| `make`             | 串起构建链                        | 必需 |
-| `powershell`       | 拼镜像、清构建产物                 | Windows 必需；Linux / macOS 用 `dd` 替代 |
-| `qemu-system-i386` | 启动镜像看效果                    | 强烈推荐 |
+| 工具 | 用途 |
+| --- | --- |
+| `nasm` | 汇编 bootloader 和内核汇编 |
+| `clang` | 编译 freestanding C 内核和用户程序 |
+| `ld.lld` | 链接内核和 ELF 用户程序 |
+| `llvm-objcopy` | 生成 raw kernel binary |
+| `make` | 构建入口 |
+| `powershell` | Windows 下打包镜像 |
+| `qemu-system-i386` | 运行 BuzzOS |
 
-构建并启动：
+构建镜像：
+
+```sh
+make
+```
+
+构建并运行：
 
 ```sh
 make run
 ```
 
-只要产物：
+只运行已有镜像，不触发重新构建：
 
 ```sh
-make
-qemu-system-i386 -drive format=raw,file=build/buzzos.img
+make run-current
 ```
 
-产物只有 `build/buzzos.img`（1 个启动扇区 + 64 个内核扇区 = 32 KiB + 512 B）。
+重建镜像并清空 `/fs` 文件系统区域：
 
-工具链验证、命令排错、构建管线细节在 [`docs/tutorial.md`](docs/tutorial.md) §1、§10、§12。
+```sh
+make image-reset-fs
+```
 
----
+如果 `make` 报 `build/buzzos.img` 或 `build/user/*.o` 被占用，通常是 QEMU 还在运行。关掉 QEMU 后再构建。
 
-## 仓库即教程
+## 镜像布局
 
-4 个核心文件，对应启动链的 4 跳：
+`build/buzzos.img` 是一块 raw 磁盘镜像：
 
-- 启动扇区 — [`src/boot/boot.asm`](src/boot/boot.asm)
-- C 内核入口 — [`src/kernel/kernel.c`](src/kernel/kernel.c)
-- 链接脚本（装载地址、`.bss` 边界）— [`linker.ld`](linker.ld)
-- 镜像打包 — [`tools/mkimage.ps1`](tools/mkimage.ps1)
+| 区域 | 用途 |
+| --- | --- |
+| LBA 0 | boot sector |
+| LBA 1..256 | kernel 预留区，最多 128 KiB |
+| LBA 512..767 | `/fs` mini 文件系统区域，128 KiB |
 
-读法建议：先按顺序读 [`docs/tutorial.md`](docs/tutorial.md)，每读一节回到对应文件对照代码；改完一节就跑一次 `make run` 看效果。教程里 §11 给出了三个练手改动（启动标题、内核文本、屏幕颜色），是验证整条链路最直接的入口。
+`tools/mkimage.ps1` 默认会在重建镜像时保留旧镜像的 `/fs` 区域。需要清空时显式运行 `make image-reset-fs`。
 
----
+## Shell 命令
 
-## 贡献
+启动后会进入用户态 shell：
 
-最欢迎的贡献是**让教程和代码一起长大**：
+```text
+=== BuzzOS User Shell ===
+buzzos:/>
+```
 
-1. **修教程里讲错的地方**：命令过时、术语不准、代码和解释对不上——直接提 PR 改 `docs/tutorial.md`。
-2. **加一节能力**：在 §13 路线图里挑一项，按现有章节的格式写一节"它怎么工作、代码怎么改、怎么验证"。建议先开 issue 同步一下，避免多人撞车。
-3. **加一个 demo 改动**：在 §11 的三个改动之外再加一个"改一行就看到效果"的小例子。
+常用命令：
 
-提 issue 也算贡献：跑不起来、某个步骤看不懂、对未来路线有意见——这些反馈直接影响教程下一节怎么写。
+```text
+ls [path]
+cd [path]
+pwd
+stat <path>
+cat <file>
+mkdir <dir>
+rmdir <dir>
+touch <file>
+write <file> <text>
+rm <file>
+mv <old> <new>
+exec <program> [args...] [&|bg]
+wait [pid]
+kill <pid>
+ps [-a]
+echo <text>
+sleep <seconds>
+reboot
+```
 
-代码风格上保持每一节**短到一遍读完**，每一处改动**改完就能在 QEMU 里看到效果**。这个仓库的价值就在"小到能读完、活到能继续加"。
+网络和 IPC 测试：
+
+```text
+ping <host-or-ip>
+wget <host>
+dhcp
+pipetest
+futextest
+```
+
+文件系统测试示例：
+
+```text
+mkdir /fs/a
+write /fs/a/t hello
+cat /fs/a/t
+stat /fs/a/t
+mv /fs/a/t /fs/a/u
+rm /fs/a/u
+rmdir /fs/a
+```
+
+## 设计边界
+
+BuzzOS 当前是“小而可扩展”的实现，不是完整 Unix：
+
+- socket 第一版仍复用内核中的单 TCP 连接状态，同时只支持 TCP client、UDP datagram 和 ICMP echo。
+- futex 当前是 yield-based wait/wake，接口形状保留，后续应接入真正阻塞队列。
+- mini 文件系统是固定大小、直接块、无日志的教学实现。
+- syscall 用户指针校验是范围检查，不是完整页级权限验证。
+- 还没有 `fork/execve`、权限模型、动态链接、信号、成熟网络协议栈。
+
+## 推荐下一步
+
+- 把 futex 接入 scheduler wait queue，避免等待时空转。
+- 把 TCP 状态从全局变量拆成 per-socket PCB，支持多个并发连接。
+- 增加 `fork` / `execve` / `pipe` shell 管道。
+- 把 `ramfs`、`devfs`、`minifs` 从 `vfs.c` 进一步拆成独立 fs 模块。
+- 给 minifs 加 fsck、free list 校验和更完整的 rename/unlink 语义。
+
+## 代码入口
+
+- Bootloader: [src/boot/boot.asm](src/boot/boot.asm)
+- Kernel entry: [src/kernel/kernel.c](src/kernel/kernel.c)
+- Scheduler/processes: [src/kernel/task.c](src/kernel/task.c)
+- Syscalls: [src/kernel/syscall.c](src/kernel/syscall.c)
+- VFS: [src/kernel/vfs.c](src/kernel/vfs.c)
+- Mini FS: [src/kernel/fs/minifs.c](src/kernel/fs/minifs.c)
+- ATA/block cache: [src/kernel/block](src/kernel/block)
+- Network stack: [src/kernel/net.c](src/kernel/net.c)
+- User shell: [src/user/shell.c](src/user/shell.c)
+- User libc: [src/user/libc.c](src/user/libc.c)

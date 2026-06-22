@@ -10,6 +10,13 @@
 #define FS_NAME_LEN   24
 #define FS_FILE_BUFSZ 2048
 #define MAX_MOUNTS    8
+#define MAX_PIPES     16
+#define PIPE_BUFSZ    512
+
+enum {
+    PIPE_READ_END = 1,
+    PIPE_WRITE_END = 2,
+};
 
 enum node_type {
     NODE_FREE = 0,
@@ -37,6 +44,8 @@ struct file_stream {
     struct fs_node *node;
     size_t pos;
     uint16_t minifs_ino;
+    int pipe_idx;
+    int pipe_end;
 };
 
 struct open_file {
@@ -67,6 +76,16 @@ struct fs_ops {
     int (*ls)(const char *abs, const char *rel, void (*putc)(char));
 };
 
+struct pipe_obj {
+    int used;
+    int readers;
+    int writers;
+    size_t head;
+    size_t tail;
+    size_t count;
+    uint8_t data[PIPE_BUFSZ];
+};
+
 static struct fs_node nodes[FS_MAX_NODES];
 static struct fs_node *root_node;
 static struct fs_node *dev_node;
@@ -76,6 +95,7 @@ static struct open_file open_files[MAX_TASKS][MAX_FD];
 static int fd_open_file[MAX_TASKS][MAX_FD];
 static int fd_used[MAX_TASKS][MAX_FD];
 static struct vfs_mount mounts[MAX_MOUNTS];
+static struct pipe_obj pipes[MAX_PIPES];
 static volatile int vfs_locked;
 static uint32_t vfs_irq_flags;
 
@@ -373,6 +393,7 @@ static const struct vnode_ops file_ops;
 static const struct vnode_ops dir_ops;
 static const struct vnode_ops minifs_file_ops;
 static const struct vnode_ops minifs_dir_ops;
+static const struct vnode_ops pipe_ops;
 static const struct fs_ops ramfs_ops;
 static const struct fs_ops minifs_ops;
 
@@ -428,6 +449,8 @@ static void init_open_file(struct open_file *of, int flags) {
     of->stream.node = 0;
     of->stream.pos = 0;
     of->stream.minifs_ino = 0;
+    of->stream.pipe_idx = -1;
+    of->stream.pipe_end = 0;
 }
 
 static int ramfs_fs_open(const char *abs, const char *rel, int flags, struct open_file *of) {
@@ -550,6 +573,8 @@ static int close_fd_locked(int owner, int fd) {
     of->stream.node = 0;
     of->stream.pos = 0;
     of->stream.minifs_ino = 0;
+    of->stream.pipe_idx = -1;
+    of->stream.pipe_end = 0;
     return ret;
 }
 
@@ -684,6 +709,69 @@ static const struct vnode_ops minifs_dir_ops = {
     .write = minifs_dir_write,
     .getdents = minifs_dir_getdents,
     .close = minifs_vn_close,
+};
+
+/* ------------------------------------------------------------------ */
+/*  Pipe vnode ops                                                     */
+/* ------------------------------------------------------------------ */
+
+static int pipe_open(vnode_t *vn) { (void)vn; return 0; }
+
+static int pipe_close(vnode_t *vn) {
+    struct file_stream *s = (struct file_stream *)vn->data;
+    if (!s || s->pipe_idx < 0 || s->pipe_idx >= MAX_PIPES)
+        return -1;
+    struct pipe_obj *p = &pipes[s->pipe_idx];
+    if (!p->used)
+        return -1;
+    if (s->pipe_end == PIPE_READ_END && p->readers > 0)
+        p->readers--;
+    if (s->pipe_end == PIPE_WRITE_END && p->writers > 0)
+        p->writers--;
+    if (p->readers == 0 && p->writers == 0)
+        p->used = 0;
+    return 0;
+}
+
+static int pipe_read(vnode_t *vn, void *buf, size_t count) {
+    struct file_stream *s = (struct file_stream *)vn->data;
+    if (!s || s->pipe_end != PIPE_READ_END || s->pipe_idx < 0 || s->pipe_idx >= MAX_PIPES)
+        return -1;
+    struct pipe_obj *p = &pipes[s->pipe_idx];
+    if (!p->used)
+        return -1;
+    uint8_t *out = (uint8_t *)buf;
+    size_t done = 0;
+    while (done < count && p->count > 0) {
+        out[done++] = p->data[p->tail];
+        p->tail = (p->tail + 1) % PIPE_BUFSZ;
+        p->count--;
+    }
+    return (int)done;
+}
+
+static int pipe_write(vnode_t *vn, const void *buf, size_t count) {
+    struct file_stream *s = (struct file_stream *)vn->data;
+    if (!s || s->pipe_end != PIPE_WRITE_END || s->pipe_idx < 0 || s->pipe_idx >= MAX_PIPES)
+        return -1;
+    struct pipe_obj *p = &pipes[s->pipe_idx];
+    if (!p->used || p->readers == 0)
+        return -1;
+    const uint8_t *in = (const uint8_t *)buf;
+    size_t done = 0;
+    while (done < count && p->count < PIPE_BUFSZ) {
+        p->data[p->head] = in[done++];
+        p->head = (p->head + 1) % PIPE_BUFSZ;
+        p->count++;
+    }
+    return (int)done;
+}
+
+static const struct vnode_ops pipe_ops = {
+    .open = pipe_open,
+    .read = pipe_read,
+    .write = pipe_write,
+    .close = pipe_close,
 };
 
 /* ------------------------------------------------------------------ */
@@ -880,6 +968,82 @@ int vfs_dup2(int oldfd, int newfd) {
     fd_open_file[owner][newfd] = of_idx;
     vfs_unlock();
     return newfd;
+}
+
+int vfs_pipe(int fds[2]) {
+    if (!fds)
+        return -1;
+    vfs_lock();
+    int owner = current_fd_owner();
+    if (!valid_fd_owner(owner)) {
+        vfs_unlock();
+        return -1;
+    }
+
+    int pipe_idx = -1;
+    for (int i = 0; i < MAX_PIPES; i++) {
+        if (!pipes[i].used) {
+            pipe_idx = i;
+            break;
+        }
+    }
+    int rfd = alloc_fd_slot(owner);
+    if (rfd < 0 || pipe_idx < 0) {
+        vfs_unlock();
+        return -1;
+    }
+    fd_used[owner][rfd] = 1;
+    int wfd = alloc_fd_slot(owner);
+    fd_used[owner][rfd] = 0;
+    if (wfd < 0) {
+        vfs_unlock();
+        return -1;
+    }
+    int rof = alloc_open_file(owner);
+    if (rof < 0) {
+        vfs_unlock();
+        return -1;
+    }
+    open_files[owner][rof].used = 1;
+    int wof = alloc_open_file(owner);
+    open_files[owner][rof].used = 0;
+    if (wof < 0) {
+        vfs_unlock();
+        return -1;
+    }
+
+    struct pipe_obj *p = &pipes[pipe_idx];
+    p->used = 1;
+    p->readers = 1;
+    p->writers = 1;
+    p->head = 0;
+    p->tail = 0;
+    p->count = 0;
+
+    struct open_file *r = &open_files[owner][rof];
+    init_open_file(r, O_RDONLY);
+    r->vnode.name = "pipe";
+    r->vnode.ops = &pipe_ops;
+    r->stream.pipe_idx = pipe_idx;
+    r->stream.pipe_end = PIPE_READ_END;
+    r->vnode.data = &r->stream;
+
+    struct open_file *w = &open_files[owner][wof];
+    init_open_file(w, O_WRONLY);
+    w->vnode.name = "pipe";
+    w->vnode.ops = &pipe_ops;
+    w->stream.pipe_idx = pipe_idx;
+    w->stream.pipe_end = PIPE_WRITE_END;
+    w->vnode.data = &w->stream;
+
+    fd_used[owner][rfd] = 1;
+    fd_used[owner][wfd] = 1;
+    fd_open_file[owner][rfd] = rof;
+    fd_open_file[owner][wfd] = wof;
+    fds[0] = rfd;
+    fds[1] = wfd;
+    vfs_unlock();
+    return 0;
 }
 
 int vfs_lseek(int fd, int offset, int whence) {
@@ -1332,6 +1496,7 @@ void vfs_init(void) {
     vfs_lock();
     for (int i = 0; i < FS_MAX_NODES; i++) nodes[i].used = 0;
     for (int i = 0; i < MAX_MOUNTS; i++) mounts[i].used = 0;
+    for (int i = 0; i < MAX_PIPES; i++) pipes[i].used = 0;
     for (int t = 0; t < MAX_TASKS; t++) {
         for (int i = 0; i < MAX_FD; i++) {
             fd_used[t][i] = 0;
@@ -1339,6 +1504,8 @@ void vfs_init(void) {
             open_files[t][i].used = 0;
             open_files[t][i].refs = 0;
             open_files[t][i].flags = 0;
+            open_files[t][i].stream.pipe_idx = -1;
+            open_files[t][i].stream.pipe_end = 0;
         }
     }
 
@@ -1374,6 +1541,8 @@ void vfs_task_reset(int task_id) {
         open_files[task_id][i].used = 0;
         open_files[task_id][i].refs = 0;
         open_files[task_id][i].flags = 0;
+        open_files[task_id][i].stream.pipe_idx = -1;
+        open_files[task_id][i].stream.pipe_end = 0;
     }
     vfs_unlock();
 }

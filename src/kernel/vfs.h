@@ -78,6 +78,7 @@ int  vfs_write(int fd, const void *buf, size_t count);
 int  vfs_close(int fd);
 int  vfs_dup(int fd);
 int  vfs_dup2(int oldfd, int newfd);
+int  vfs_pipe(int fds[2]);
 int  vfs_lseek(int fd, int offset, int whence);
 int  vfs_stat(const char *path, struct stat *st);
 int  vfs_getdents(int fd, struct dirent *ents, size_t count);

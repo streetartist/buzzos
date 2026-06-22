@@ -37,7 +37,7 @@ enum { SYS_EXIT=1, SYS_OPEN=2, SYS_CLOSE=3, SYS_READ=4, SYS_WRITE=5,
        SYS_LSEEK=27, SYS_RMDIR=28, SYS_RENAME=29, SYS_SOCKET=30,
        SYS_CONNECT=31, SYS_SEND=32, SYS_RECV=33, SYS_CLOSESOCKET=34,
        SYS_DNS_RESOLVE=35, SYS_BIND=36, SYS_SENDTO=37, SYS_RECVFROM=38,
-       SYS_NETINFO=39 };
+       SYS_NETINFO=39, SYS_PIPE=40, SYS_FUTEX_WAIT=41, SYS_FUTEX_WAKE=42 };
 
 void exit(int code) {
     syscall1(SYS_EXIT, code);
@@ -234,8 +234,24 @@ int waitpid(int pid, int *status, int options) {
     return syscall3(SYS_WAITPID, pid, (int)(uintptr_t)status, options);
 }
 
+static void thread_return_trampoline(void) {
+    exit(0);
+}
+
+int pipe(int fds[2]) {
+    return syscall1(SYS_PIPE, (int)(uintptr_t)fds);
+}
+
+int futex_wait(int *addr, int expected) {
+    return syscall2(SYS_FUTEX_WAIT, (int)(uintptr_t)addr, expected);
+}
+
+int futex_wake(int *addr, int count) {
+    return syscall2(SYS_FUTEX_WAKE, (int)(uintptr_t)addr, count);
+}
+
 int spawn(thread_fn func) {
-    return syscall1(SYS_SPAWN, (int)(uintptr_t)func);
+    return syscall2(SYS_SPAWN, (int)(uintptr_t)func, (int)(uintptr_t)thread_return_trampoline);
 }
 
 void yield(void) {
