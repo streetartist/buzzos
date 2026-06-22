@@ -20,7 +20,7 @@ Chinese main README: [README.md](README.md)
 - Syscall ABI for files, processes, directories, networking, IPC, and synchronization.
 - VFS with a mount table:
   - `/`: initrd/ramfs, including `/hello` and `/bin/sh`
-  - `/dev`: `console`, `serial`, and `null`
+  - `/dev`: standalone devfs with `console`, `serial`, and `null`
   - `/fs`: persistent mini ext-like filesystem
 - Mini filesystem:
   - directories, regular files, `mkdir`, `rmdir`, `unlink`, and `rename`
@@ -158,18 +158,19 @@ BuzzOS is intentionally small but structured to grow. It is not a complete Unix 
 - Move futex wait/wake onto scheduler wait queues to avoid spinning.
 - Split TCP state into per-socket PCBs and support concurrent TCP sockets.
 - Add `fork`, `execve`, and shell pipelines using `pipe`.
-- Move `ramfs`, `devfs`, and `minifs` out of `vfs.c` into separate filesystem modules.
 - Add fsck-style validation and stronger rename/unlink semantics to minifs.
+- Add a `/proc` pseudo filesystem for task, memory, and network state.
 
 ## Code Map
 
 - Bootloader: [src/boot/boot.asm](src/boot/boot.asm)
-- Kernel entry: [src/kernel/kernel.c](src/kernel/kernel.c)
-- Scheduler/processes: [src/kernel/task.c](src/kernel/task.c)
-- Syscalls: [src/kernel/syscall.c](src/kernel/syscall.c)
-- VFS: [src/kernel/vfs.c](src/kernel/vfs.c)
-- Mini FS: [src/kernel/fs/minifs.c](src/kernel/fs/minifs.c)
+- Kernel entry: [src/kernel/core/kernel.c](src/kernel/core/kernel.c)
+- Scheduler/processes: [src/kernel/sched/task.c](src/kernel/sched/task.c)
+- Syscalls: [src/kernel/syscall/syscall.c](src/kernel/syscall/syscall.c)
+- VFS core: [src/kernel/fs/vfs.c](src/kernel/fs/vfs.c)
+- Filesystem adapters: [src/kernel/fs/ramfs.c](src/kernel/fs/ramfs.c), [src/kernel/fs/devfs.c](src/kernel/fs/devfs.c), [src/kernel/fs/minifs_vfs.c](src/kernel/fs/minifs_vfs.c), [src/kernel/fs/pipefs.c](src/kernel/fs/pipefs.c)
+- Mini FS disk format: [src/kernel/fs/minifs/minifs.c](src/kernel/fs/minifs/minifs.c)
 - ATA/block cache: [src/kernel/block](src/kernel/block)
-- Network stack: [src/kernel/net.c](src/kernel/net.c)
-- User shell: [src/user/shell.c](src/user/shell.c)
-- User libc: [src/user/libc.c](src/user/libc.c)
+- Network stack: [src/kernel/net/net.c](src/kernel/net/net.c)
+- User shell: [src/user/bin/shell.c](src/user/bin/shell.c)
+- User libc: [src/user/libc/libc.c](src/user/libc/libc.c)

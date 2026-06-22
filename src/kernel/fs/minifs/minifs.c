@@ -1,4 +1,4 @@
-#include "fs/minifs.h"
+#include "minifs.h"
 #include "block/ata.h"
 #include "block/cache.h"
 #include "serial.h"

@@ -1,8 +1,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "netdev.h"
-#include "../kernel/io.h"
-#include "../kernel/serial.h"
+#include "io.h"
+#include "serial.h"
 
 #define IO 0x300
 

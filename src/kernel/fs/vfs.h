@@ -14,6 +14,7 @@ struct vnode_ops {
     int  (*read)(struct vnode *vn, void *buf, size_t count);
     int  (*write)(struct vnode *vn, const void *buf, size_t count);
     int  (*getdents)(struct vnode *vn, struct dirent *ents, size_t count);
+    int  (*size)(struct vnode *vn, size_t *size_out);
     int  (*close)(struct vnode *vn);
 };
 

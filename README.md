@@ -20,7 +20,7 @@ English: [README.en.md](README.en.md)
 - 系统调用 ABI：文件、进程、目录、网络、IPC、同步等基础接口。
 - VFS + mount table：
   - `/`：initrd/ramfs，包含 `/hello` 和 `/bin/sh`
-  - `/dev`：`console`、`serial`、`null`
+  - `/dev`：独立 devfs，包含 `console`、`serial`、`null`
   - `/fs`：mini ext-like 落盘文件系统
 - mini 文件系统：
   - 目录、普通文件、`mkdir`、`rmdir`、`unlink`、`rename`
@@ -158,18 +158,19 @@ BuzzOS 当前是“小而可扩展”的实现，不是完整 Unix：
 - 把 futex 接入 scheduler wait queue，避免等待时空转。
 - 把 TCP 状态从全局变量拆成 per-socket PCB，支持多个并发连接。
 - 增加 `fork` / `execve` / `pipe` shell 管道。
-- 把 `ramfs`、`devfs`、`minifs` 从 `vfs.c` 进一步拆成独立 fs 模块。
 - 给 minifs 加 fsck、free list 校验和更完整的 rename/unlink 语义。
+- 增加 `/proc` 这类伪文件系统，把任务、内存、网络状态暴露成文件。
 
 ## 代码入口
 
 - Bootloader: [src/boot/boot.asm](src/boot/boot.asm)
-- Kernel entry: [src/kernel/kernel.c](src/kernel/kernel.c)
-- Scheduler/processes: [src/kernel/task.c](src/kernel/task.c)
-- Syscalls: [src/kernel/syscall.c](src/kernel/syscall.c)
-- VFS: [src/kernel/vfs.c](src/kernel/vfs.c)
-- Mini FS: [src/kernel/fs/minifs.c](src/kernel/fs/minifs.c)
+- Kernel entry: [src/kernel/core/kernel.c](src/kernel/core/kernel.c)
+- Scheduler/processes: [src/kernel/sched/task.c](src/kernel/sched/task.c)
+- Syscalls: [src/kernel/syscall/syscall.c](src/kernel/syscall/syscall.c)
+- VFS core: [src/kernel/fs/vfs.c](src/kernel/fs/vfs.c)
+- Filesystem adapters: [src/kernel/fs/ramfs.c](src/kernel/fs/ramfs.c), [src/kernel/fs/devfs.c](src/kernel/fs/devfs.c), [src/kernel/fs/minifs_vfs.c](src/kernel/fs/minifs_vfs.c), [src/kernel/fs/pipefs.c](src/kernel/fs/pipefs.c)
+- Mini FS disk format: [src/kernel/fs/minifs/minifs.c](src/kernel/fs/minifs/minifs.c)
 - ATA/block cache: [src/kernel/block](src/kernel/block)
-- Network stack: [src/kernel/net.c](src/kernel/net.c)
-- User shell: [src/user/shell.c](src/user/shell.c)
-- User libc: [src/user/libc.c](src/user/libc.c)
+- Network stack: [src/kernel/net/net.c](src/kernel/net/net.c)
+- User shell: [src/user/bin/shell.c](src/user/bin/shell.c)
+- User libc: [src/user/libc/libc.c](src/user/libc/libc.c)

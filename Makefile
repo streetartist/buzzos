@@ -7,36 +7,45 @@ FS_START_SECTOR := 512
 FS_SECTORS := 256
 
 KERNEL_SRCS := \
-	src/kernel/kernel.c \
-	src/kernel/serial.c \
-	src/kernel/vga.c \
-	src/kernel/gdt.c \
-	src/kernel/idt.c \
-	src/kernel/pmm.c \
-	src/kernel/paging.c \
-	src/kernel/elf.c \
-	src/kernel/user.c \
-	src/kernel/task.c \
-	src/kernel/syscall.c \
-	src/kernel/vfs.c \
+	src/kernel/core/kernel.c \
+	src/kernel/core/elf.c \
+	src/kernel/core/exec.c \
+	src/kernel/arch/i386/gdt.c \
+	src/kernel/arch/i386/idt.c \
+	src/kernel/arch/i386/paging.c \
+	src/kernel/arch/i386/user.c \
+	src/kernel/mm/pmm.c \
+	src/kernel/sched/task.c \
+	src/kernel/syscall/syscall.c \
+	src/kernel/syscall/sys_file.c \
+	src/kernel/syscall/sys_proc.c \
+	src/kernel/syscall/sys_net.c \
+	src/kernel/syscall/sys_ipc.c \
+	src/kernel/fs/vfs.c \
+	src/kernel/fs/ramfs.c \
+	src/kernel/fs/devfs.c \
+	src/kernel/fs/pipefs.c \
+	src/kernel/fs/minifs_vfs.c \
 	src/kernel/block/ata.c \
 	src/kernel/block/cache.c \
-	src/kernel/fs/minifs.c \
-	src/kernel/keyboard.c \
-	src/kernel/timer.c \
-	src/kernel/reboot.c \
-	src/kernel/exec.c \
-	src/kernel/netdev.c \
-	src/kernel/net.c
+	src/kernel/fs/minifs/minifs.c \
+	src/kernel/net/netdev.c \
+	src/kernel/net/net.c \
+	src/kernel/drv/keyboard.c \
+	src/kernel/drv/timer.c \
+	src/kernel/drv/serial.c \
+	src/kernel/drv/vga.c \
+	src/kernel/drv/reboot.c \
+	src/kernel/drv/ne2000.c
 
-DRV_SRCS := src/drv/ne2000.c
-
-KERNEL_ASMS := src/kernel/isr.asm src/kernel/switch.asm src/kernel/setjmp.asm
+KERNEL_ASMS := \
+	src/kernel/arch/i386/isr.asm \
+	src/kernel/arch/i386/switch.asm \
+	src/kernel/arch/i386/setjmp.asm
 
 KERNEL_C_OBJS  := $(patsubst src/kernel/%.c,$(OBJDIR)/%.o,$(KERNEL_SRCS))
-DRV_OBJS       := $(patsubst src/drv/%.c,$(OBJDIR)/drv_%.o,$(DRV_SRCS))
 KERNEL_ASM_OBJS:= $(patsubst src/kernel/%.asm,$(OBJDIR)/%.o-asm,$(KERNEL_ASMS))
-KERNEL_OBJS    := $(KERNEL_C_OBJS) $(DRV_OBJS) $(KERNEL_ASM_OBJS)
+KERNEL_OBJS    := $(KERNEL_C_OBJS) $(KERNEL_ASM_OBJS)
 
 NASM := nasm
 CC   := clang
@@ -44,22 +53,35 @@ LD   := ld.lld
 OBJCOPY := llvm-objcopy
 QEMU := "D:/Program Files/qemu/qemu-system-i386.exe"
 
+KERNEL_INCLUDES := \
+	-Isrc/kernel \
+	-Isrc/kernel/core \
+	-Isrc/kernel/arch/i386 \
+	-Isrc/kernel/mm \
+	-Isrc/kernel/sched \
+	-Isrc/kernel/syscall \
+	-Isrc/kernel/fs \
+	-Isrc/kernel/fs/minifs \
+	-Isrc/kernel/block \
+	-Isrc/kernel/net \
+	-Isrc/kernel/drv
+
 CFLAGS  := --target=i386-none-elf -std=c11 -ffreestanding -fno-builtin \
 	-fno-stack-protector -fno-pic -mno-sse -mno-mmx -O2 -Wall -Wextra \
-	-Isrc/kernel
+	$(KERNEL_INCLUDES)
 
 # User programs: allow x87 FPU (no SSE, but soft-float not needed)
 UCFLAGS := --target=i386-none-elf -std=c11 -ffreestanding -fno-builtin \
 	-fno-stack-protector -fno-pic -mno-sse -mno-mmx -mfpmath=387 -O2 \
-	-Wall -Wextra -Isrc/user
+	-Wall -Wextra -Isrc/user/libc
 LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 
 # User programs (linked with crt0 + libc)
 USER_ELF := $(BUILD)/user/hello.elf
 SHELL_ELF := $(BUILD)/user/shell.elf
 USER_ELFS := $(USER_ELF) $(SHELL_ELF)
-USER_SRCS := src/user/hello.c src/user/shell.c
-USER_LIB  := src/user/crt0.c src/user/libc.c
+USER_SRCS := src/user/bin/hello.c src/user/bin/shell.c
+USER_LIB  := src/user/libc/crt0.c src/user/libc/libc.c
 INITRD_H := src/kernel/initrd.h
 
 .PHONY: all clean run run-current image-reset-fs
@@ -75,10 +97,8 @@ $(OBJDIR)/%.o: src/kernel/%.c | $(OBJDIR)
 
 $(OBJDIR)/kernel.o: $(INITRD_H)
 
-$(OBJDIR)/drv_%.o: src/drv/%.c | $(OBJDIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
 $(OBJDIR)/%.o-asm: src/kernel/%.asm | $(OBJDIR)
+	powershell -NoProfile -Command "New-Item -ItemType Directory -Force (Split-Path '$@' -Parent) | Out-Null"
 	$(NASM) -f elf32 $< -o $@
 
 $(OBJDIR)/boot.bin: src/boot/boot.asm | $(OBJDIR)
@@ -104,17 +124,17 @@ build/user/user.ld: | $(BUILD)/user
 	@echo 'ENTRY(_start)' > $@
 	@echo 'SECTIONS { . = 0x200000; .text : { *(.text.entry) *(.text*) } .rodata : { *(.rodata*) } .data : { *(.data*) } .bss : { *(.bss*) *(COMMON) } }' >> $@
 
-$(BUILD)/user/crt0.o: src/user/crt0.c | $(BUILD)/user
-	$(CC) $(UCFLAGS) -c src/user/crt0.c -o $(BUILD)/user/crt0.o
+$(BUILD)/user/crt0.o: src/user/libc/crt0.c src/user/libc/libc.h | $(BUILD)/user
+	$(CC) $(UCFLAGS) -c src/user/libc/crt0.c -o $(BUILD)/user/crt0.o
 
-$(BUILD)/user/libc.o: src/user/libc.c src/user/libc.h | $(BUILD)/user
-	$(CC) $(UCFLAGS) -c src/user/libc.c -o $(BUILD)/user/libc.o
+$(BUILD)/user/libc.o: src/user/libc/libc.c src/user/libc/libc.h | $(BUILD)/user
+	$(CC) $(UCFLAGS) -c src/user/libc/libc.c -o $(BUILD)/user/libc.o
 
-$(BUILD)/user/hello.o: src/user/hello.c src/user/libc.h | $(BUILD)/user
-	$(CC) $(UCFLAGS) -c src/user/hello.c -o $(BUILD)/user/hello.o
+$(BUILD)/user/hello.o: src/user/bin/hello.c src/user/libc/libc.h | $(BUILD)/user
+	$(CC) $(UCFLAGS) -c src/user/bin/hello.c -o $(BUILD)/user/hello.o
 
-$(BUILD)/user/shell.o: src/user/shell.c src/user/libc.h | $(BUILD)/user
-	$(CC) $(UCFLAGS) -c src/user/shell.c -o $(BUILD)/user/shell.o
+$(BUILD)/user/shell.o: src/user/bin/shell.c src/user/libc/libc.h | $(BUILD)/user
+	$(CC) $(UCFLAGS) -c src/user/bin/shell.c -o $(BUILD)/user/shell.o
 
 $(USER_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/hello.o build/user/user.ld | $(BUILD)/user
 	$(LD) -m elf_i386 -T build/user/user.ld -nostdlib -o $@ \
