@@ -16,6 +16,7 @@ English: [README.en.md](README.en.md)
 - GDT、IDT、异常处理、PIC、PIT timer、键盘输入、VGA 文本输出、串口输出。
 - E820 物理内存探测、bitmap PMM、分页、用户态地址空间。
 - ELF32 用户程序加载，用户态 `/bin/sh` shell。
+- 用户态 `nano` 编辑器和 `basm` 小型汇编器，可在 BuzzOS 内编辑、汇编并运行简单汇编程序。
 - 抢占式任务调度，进程/线程模型，`spawn`、`join`、`sleep`、`waitpid`、`kill`。
 - 系统调用 ABI：文件、进程、目录、网络、IPC、同步等基础接口。
 - VFS + mount table：
@@ -84,8 +85,8 @@ make image-reset-fs
 | 区域 | 用途 |
 | --- | --- |
 | LBA 0 | boot sector |
-| LBA 1..256 | kernel 预留区，最多 128 KiB |
-| LBA 512..767 | `/fs` mini 文件系统区域，128 KiB |
+| LBA 1..384 | kernel 预留区，最多 192 KiB |
+| LBA 512..1023 | `/fs` mini 文件系统区域，256 KiB |
 
 `tools/mkimage.ps1` 默认会在重建镜像时保留旧镜像的 `/fs` 区域。需要清空时显式运行 `make image-reset-fs`。
 
@@ -110,6 +111,8 @@ mkdir <dir>
 rmdir <dir>
 touch <file>
 write <file> <text>
+nano <file>
+basm <input.asm> [output]
 rm <file>
 mv <old> <new>
 exec <program> [args...] [&|bg]
@@ -131,6 +134,16 @@ pipetest
 futextest
 ```
 
+在 BuzzOS 内写汇编并运行：
+
+```text
+nano /fs/demo.asm
+basm /fs/demo.asm /fs/demo
+exec /fs/demo
+```
+
+`nano` 里可以按 `Ctrl+T` 插入一个最小汇编模板，`Ctrl+S` 保存，`Ctrl+C` 退出。
+
 文件系统测试示例：
 
 ```text
@@ -149,7 +162,7 @@ BuzzOS 当前是“小而可扩展”的实现，不是完整 Unix：
 
 - socket 第一版仍复用内核中的单 TCP 连接状态，同时只支持 TCP client、UDP datagram 和 ICMP echo。
 - futex 当前是 yield-based wait/wake，接口形状保留，后续应接入真正阻塞队列。
-- mini 文件系统是固定大小、直接块、无日志的教学实现。
+- mini 文件系统是固定大小、直接块 + 一级 indirect block、无日志的教学实现。
 - syscall 用户指针校验是范围检查，不是完整页级权限验证。
 - 还没有 `fork/execve`、权限模型、动态链接、信号、成熟网络协议栈。
 

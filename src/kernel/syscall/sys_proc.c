@@ -10,28 +10,44 @@
 #include "vfs.h"
 
 static volatile int exec_syscall_lock;
+static char exec_path_buf[256];
+static char exec_argv_storage[16][256];
+static const char *exec_argv_ptrs[16];
 
-static int spawn_proc_common(const char *path, int flags, int argc, const char *const argv[]) {
-    static uint8_t elf_buf[65536];
-
+static void exec_lock(void) {
     while (__sync_lock_test_and_set(&exec_syscall_lock, 1))
         task_yield();
+}
+
+static void exec_unlock(void) {
+    __sync_lock_release(&exec_syscall_lock);
+}
+
+static void copy_user_cstr_256(char *dst, const char *src) {
+    int i = 0;
+    if (!src)
+        src = "";
+    while (i < 255 && src[i]) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
+static int spawn_proc_common_locked(const char *path, int flags, int argc, const char *const argv[]) {
+    static uint8_t elf_buf[65536];
 
     int fd = vfs_open_flags(path, O_RDONLY);
-    if (fd < 0) {
-        __sync_lock_release(&exec_syscall_lock);
+    if (fd < 0)
         return -1;
-    }
 
     int total = 0;
     int n;
     while ((n = vfs_read(fd, elf_buf + total, sizeof(elf_buf) - (size_t)total)) > 0)
         total += n;
     vfs_close(fd);
-    if (n < 0 || total < 52 || total == (int)sizeof(elf_buf)) {
-        __sync_lock_release(&exec_syscall_lock);
+    if (n < 0 || total < 52 || total == (int)sizeof(elf_buf))
         return -1;
-    }
 
     const char *name = path;
     for (int i = 0; path && path[i]; i++)
@@ -39,7 +55,6 @@ static int spawn_proc_common(const char *path, int flags, int argc, const char *
             name = path + i + 1;
     int silent = (flags & 1u) ? 1 : 0;
     int pid = exec_start_args(elf_buf, (size_t)total, name, silent, argc, argv);
-    __sync_lock_release(&exec_syscall_lock);
     return pid;
 }
 
@@ -63,8 +78,13 @@ int sys_spawn_proc(uint32_t path_arg, uint32_t flags, uint32_t c, uint32_t d, ui
     const char *path = (const char *)(uintptr_t)path_arg;
     if (!user_string_ok(path))
         return -1;
-    const char *argv[1] = { path };
-    return spawn_proc_common(path, (int)flags, 1, argv);
+
+    exec_lock();
+    copy_user_cstr_256(exec_path_buf, path);
+    exec_argv_ptrs[0] = exec_path_buf;
+    int pid = spawn_proc_common_locked(exec_path_buf, (int)flags, 1, exec_argv_ptrs);
+    exec_unlock();
+    return pid;
 }
 
 int sys_spawn_proc_args(uint32_t path_arg, uint32_t argv_arg, uint32_t argc_arg,
@@ -82,17 +102,25 @@ int sys_spawn_proc_args(uint32_t path_arg, uint32_t argv_arg, uint32_t argc_arg,
     if (argc > 0 && !user_range_ok(argv_arg, (uint32_t)argc * sizeof(char *)))
         return -1;
 
-    const char *argv[16];
+    exec_lock();
+    copy_user_cstr_256(exec_path_buf, path);
+
     for (int i = 0; i < argc; i++) {
-        if (user_argv && !user_string_ok(user_argv[i]))
+        if (user_argv && !user_string_ok(user_argv[i])) {
+            exec_unlock();
             return -1;
-        argv[i] = user_argv ? user_argv[i] : "";
+        }
+        copy_user_cstr_256(exec_argv_storage[i], user_argv ? user_argv[i] : "");
+        exec_argv_ptrs[i] = exec_argv_storage[i];
     }
     if (argc == 0) {
-        argv[0] = path;
+        copy_user_cstr_256(exec_argv_storage[0], exec_path_buf);
+        exec_argv_ptrs[0] = exec_argv_storage[0];
         argc = 1;
     }
-    return spawn_proc_common(path, (int)flags, argc, argv);
+    int pid = spawn_proc_common_locked(exec_path_buf, (int)flags, argc, exec_argv_ptrs);
+    exec_unlock();
+    return pid;
 }
 
 int sys_ps(uint32_t buf, uint32_t size, uint32_t show_dead, uint32_t d, uint32_t e) {

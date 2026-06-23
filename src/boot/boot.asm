@@ -1,6 +1,6 @@
 %define KERNEL_FINAL_ADDR 0x1000
 %define KERNEL_HIGH_SEG   0x1000   ; ES segment → physical 0x10000
-%define KERNEL_SECTORS    256      ; up to 128 KiB, loaded at 0x10000
+%define KERNEL_SECTORS    384      ; up to 192 KiB, loaded at 0x10000
 %define READ_CHUNK        64
 
 bits 16

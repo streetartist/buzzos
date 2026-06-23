@@ -16,6 +16,7 @@ Chinese main README: [README.md](README.md)
 - GDT, IDT, exception handling, PIC, PIT timer, keyboard input, VGA text output, and serial output.
 - E820 memory detection, bitmap physical memory manager, paging, and user address spaces.
 - ELF32 user-program loader and a user-space `/bin/sh` shell.
+- User-space `nano` editor and small `basm` assembler for editing, assembling, and running simple assembly programs inside BuzzOS.
 - Preemptive scheduling, process/thread model, `spawn`, `join`, `sleep`, `waitpid`, and `kill`.
 - Syscall ABI for files, processes, directories, networking, IPC, and synchronization.
 - VFS with a mount table:
@@ -84,8 +85,8 @@ If `make` reports that `build/buzzos.img` or `build/user/*.o` is in use, QEMU is
 | Area | Purpose |
 | --- | --- |
 | LBA 0 | boot sector |
-| LBA 1..256 | reserved kernel area, up to 128 KiB |
-| LBA 512..767 | `/fs` mini filesystem area, 128 KiB |
+| LBA 1..384 | reserved kernel area, up to 192 KiB |
+| LBA 512..1023 | `/fs` mini filesystem area, 256 KiB |
 
 `tools/mkimage.ps1` preserves the old `/fs` region by default when rebuilding the image. Use `make image-reset-fs` when you want a clean filesystem.
 
@@ -109,6 +110,8 @@ cat <file>
 mkdir <dir>
 rmdir <dir>
 touch <file>
+nano <file>
+basm <input.asm> [output]
 write <file> <text>
 rm <file>
 mv <old> <new>
@@ -131,6 +134,16 @@ pipetest
 futextest
 ```
 
+Edit, assemble, and run assembly inside BuzzOS:
+
+```text
+nano /fs/demo.asm
+basm /fs/demo.asm /fs/demo
+exec /fs/demo
+```
+
+In `nano`, `Ctrl+T` inserts a minimal assembly template, `Ctrl+S` saves, and `Ctrl+C` exits.
+
 Filesystem test example:
 
 ```text
@@ -149,7 +162,7 @@ BuzzOS is intentionally small but structured to grow. It is not a complete Unix 
 
 - The first socket layer still reuses a single global TCP connection state. It supports TCP client sockets, UDP datagrams, and ICMP echo.
 - Futex wait/wake currently uses yield-based waiting. The interface is in place, but it should move to scheduler-backed wait queues.
-- The mini filesystem is fixed-size, direct-block-only, and has no journal.
+- The mini filesystem is fixed-size, uses direct blocks plus one indirect block, and has no journal.
 - Syscall user-pointer validation is range-based, not full page-permission validation.
 - There is no `fork` / `execve`, permission model, dynamic linker, signal system, or mature network stack yet.
 

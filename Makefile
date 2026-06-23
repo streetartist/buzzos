@@ -2,9 +2,9 @@ BUILD := build
 BUILD_ID := $(shell powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()")
 OBJDIR := $(BUILD)/obj/$(BUILD_ID)
 IMAGE := $(BUILD)/buzzos.img
-KERNEL_SECTORS := 256
+KERNEL_SECTORS := 384
 FS_START_SECTOR := 512
-FS_SECTORS := 256
+FS_SECTORS := 512
 
 KERNEL_SRCS := \
 	src/kernel/core/kernel.c \
@@ -79,8 +79,10 @@ LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 # User programs (linked with crt0 + libc)
 USER_ELF := $(BUILD)/user/hello.elf
 SHELL_ELF := $(BUILD)/user/shell.elf
-USER_ELFS := $(USER_ELF) $(SHELL_ELF)
-USER_SRCS := src/user/bin/hello.c src/user/bin/shell.c
+NANO_ELF := $(BUILD)/user/nano.elf
+BASM_ELF := $(BUILD)/user/basm.elf
+USER_ELFS := $(USER_ELF) $(SHELL_ELF) $(NANO_ELF) $(BASM_ELF)
+USER_SRCS := src/user/bin/hello.c src/user/bin/shell.c src/user/bin/nano.c src/user/bin/basm.c
 USER_LIB  := src/user/libc/crt0.c src/user/libc/libc.c
 INITRD_H := src/kernel/initrd.h
 
@@ -95,7 +97,7 @@ $(OBJDIR)/%.o: src/kernel/%.c | $(OBJDIR)
 	powershell -NoProfile -Command "New-Item -ItemType Directory -Force (Split-Path '$@' -Parent) | Out-Null"
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJDIR)/kernel.o: $(INITRD_H)
+$(OBJDIR)/core/kernel.o: $(INITRD_H)
 
 $(OBJDIR)/%.o-asm: src/kernel/%.asm | $(OBJDIR)
 	powershell -NoProfile -Command "New-Item -ItemType Directory -Force (Split-Path '$@' -Parent) | Out-Null"
@@ -120,7 +122,7 @@ $(IMAGE): $(OBJDIR)/boot.bin $(OBJDIR)/kernel.bin tools/mkimage.ps1
 $(BUILD)/user:
 	powershell -NoProfile -Command "New-Item -ItemType Directory -Force '$(BUILD)/user' | Out-Null"
 
-build/user/user.ld: | $(BUILD)/user
+$(BUILD)/user/user.ld: | $(BUILD)/user
 	@echo 'ENTRY(_start)' > $@
 	@echo 'SECTIONS { . = 0x200000; .text : { *(.text.entry) *(.text*) } .rodata : { *(.rodata*) } .data : { *(.data*) } .bss : { *(.bss*) *(COMMON) } }' >> $@
 
@@ -136,16 +138,31 @@ $(BUILD)/user/hello.o: src/user/bin/hello.c src/user/libc/libc.h | $(BUILD)/user
 $(BUILD)/user/shell.o: src/user/bin/shell.c src/user/libc/libc.h | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c src/user/bin/shell.c -o $(BUILD)/user/shell.o
 
-$(USER_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/hello.o build/user/user.ld | $(BUILD)/user
-	$(LD) -m elf_i386 -T build/user/user.ld -nostdlib -o $@ \
+$(BUILD)/user/nano.o: src/user/bin/nano.c src/user/libc/libc.h | $(BUILD)/user
+	$(CC) $(UCFLAGS) -c src/user/bin/nano.c -o $(BUILD)/user/nano.o
+
+$(BUILD)/user/basm.o: src/user/bin/basm.c src/user/libc/libc.h | $(BUILD)/user
+	$(CC) $(UCFLAGS) -c src/user/bin/basm.c -o $(BUILD)/user/basm.o
+
+$(USER_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/hello.o $(BUILD)/user/user.ld | $(BUILD)/user
+	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
 		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/hello.o
 
-$(SHELL_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/shell.o build/user/user.ld | $(BUILD)/user
-	$(LD) -m elf_i386 -T build/user/user.ld -nostdlib -o $@ \
+$(SHELL_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/shell.o $(BUILD)/user/user.ld | $(BUILD)/user
+	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
 		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/shell.o
 
+$(NANO_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/nano.o $(BUILD)/user/user.ld | $(BUILD)/user
+	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
+		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/nano.o
+
+$(BASM_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/basm.o $(BUILD)/user/user.ld | $(BUILD)/user
+	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
+		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/basm.o
+
 $(INITRD_H): $(USER_ELFS) tools/mkinitrd.py
-	python tools/mkinitrd.py /hello $(USER_ELF) /bin/sh $(SHELL_ELF) > $@
+	python tools/mkinitrd.py /hello $(USER_ELF) /bin/sh $(SHELL_ELF) \
+		/bin/nano $(NANO_ELF) /bin/basm $(BASM_ELF) > $@
 
 .PHONY: user
 user: $(INITRD_H)

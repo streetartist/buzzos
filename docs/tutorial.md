@@ -69,7 +69,7 @@ BuzzOS 是一个教学型、极简但可扩展的 i386 POSIX-like OS。它的定
 - 还没有完整 POSIX：没有 `fork`、`execve`、信号、权限模型、动态链接。
 - TCP socket 仍是早期实现，底层连接状态还不适合大量并发 TCP。
 - futex 接口已经有，但等待实现还比较轻量，后面应接 scheduler wait queue。
-- minifs 是固定大小、直接块、无日志的教学文件系统。
+- minifs 是固定大小、直接块 + 一级 indirect block、无日志的教学文件系统。
 - syscall 用户指针校验是范围检查，还不是完整的页级权限校验。
 
 ---
@@ -293,7 +293,7 @@ help
 当前 shell 支持：
 
 ```text
-ls cd pwd stat cat mkdir rmdir touch write rm mv ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help
+ls cd pwd stat cat mkdir rmdir touch write rm mv nano basm ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help
 ```
 
 先做最小验证：
@@ -320,6 +320,16 @@ buzzos:/>
 buzzos:/fs>
 ```
 
+内置 `nano` 和 `basm` 可以直接在 BuzzOS 里写一个简单汇编程序、汇编成 ELF，然后运行：
+
+```text
+nano /fs/demo.asm
+basm /fs/demo.asm /fs/demo
+exec /fs/demo
+```
+
+`nano` 里 `Ctrl+T` 插入最小汇编模板，`Ctrl+S` 保存，`Ctrl+C` 退出。
+
 `cd` 示例：
 
 ```text
@@ -338,22 +348,22 @@ pwd
 | 区域 | 用途 |
 | --- | --- |
 | LBA 0 | boot sector |
-| LBA 1..256 | kernel 预留区，最多 128 KiB |
-| LBA 512..767 | `/fs` minifs 区域，128 KiB |
+| LBA 1..384 | kernel 预留区，最多 192 KiB |
+| LBA 512..1023 | `/fs` minifs 区域，256 KiB |
 
 这些数字来自 [Makefile](../Makefile)：
 
 ```makefile
-KERNEL_SECTORS := 256
+KERNEL_SECTORS := 384
 FS_START_SECTOR := 512
-FS_SECTORS := 256
+FS_SECTORS := 512
 ```
 
 也来自 [src/kernel/fs/minifs/minifs.h](../src/kernel/fs/minifs/minifs.h)：
 
 ```c
 MINIFS_LBA_START = 512,
-MINIFS_SECTORS = 256,
+MINIFS_SECTORS = 512,
 ```
 
 关键点：
@@ -705,7 +715,7 @@ x86 BIOS 启动时会把启动盘第一个扇区读到物理地址：
 ```asm
 %define KERNEL_FINAL_ADDR 0x1000
 %define KERNEL_HIGH_SEG   0x1000
-%define KERNEL_SECTORS    256
+%define KERNEL_SECTORS    384
 %define READ_CHUNK        64
 ```
 
@@ -716,12 +726,12 @@ x86 BIOS 启动时会把启动盘第一个扇区读到物理地址：
 - 进入保护模式后再复制到最终地址 `0x1000`。
 - `READ_CHUNK=64` 是为了避开 BIOS 单次读取扇区数限制。
 
-### 11.3 为什么 kernel 预留区是 256 扇区
+### 11.3 为什么 kernel 预留区是 384 扇区
 
 一个扇区 512 字节：
 
 ```text
-256 * 512 = 131072 bytes = 128 KiB
+384 * 512 = 196608 bytes = 192 KiB
 ```
 
 Makefile 和 boot.asm 必须一致。如果内核超过 boot.asm 加载的扇区数，`tools/mkimage.ps1` 会直接报错，例如：
@@ -1075,7 +1085,7 @@ minifs 在 [src/kernel/fs/minifs/minifs.c](../src/kernel/fs/minifs/minifs.c)。
 - inode table。
 - block bitmap。
 - directory entry。
-- direct blocks。
+- direct blocks 和一级 indirect block。
 - 固定大小。
 - 无日志。
 
@@ -1083,9 +1093,10 @@ minifs 在 [src/kernel/fs/minifs/minifs.c](../src/kernel/fs/minifs/minifs.c)。
 
 ```c
 MINIFS_BLOCK_SIZE  512
-MINIFS_INODES      64
-MINIFS_BLOCKS      192
+MINIFS_INODES      128
+MINIFS_BLOCKS      382
 MINIFS_DIRECT      8
+MINIFS_INDIRECT_ENTRIES 256
 MINIFS_NAME_LEN    24
 ```
 
@@ -1093,7 +1104,7 @@ MINIFS_NAME_LEN    24
 
 - 文件名最长约 23 字符。
 - inode 数量有限。
-- 单文件大小受 direct block 数限制。
+- 单文件大小受 direct + 一级 indirect block 数限制，当前理论上限约 132 KiB。
 - 不适合大文件，但适合教学和 shell 实验。
 
 ### 16.4 块缓存
@@ -1225,7 +1236,7 @@ Kernel is ... bytes, but boot.asm loads only ... bytes.
 
 原因：bootloader 读取的 kernel 扇区数小于实际 kernel 大小。
 
-当前应该是 256 扇区，也就是 128 KiB。要检查：
+当前应该是 384 扇区，也就是 192 KiB。要检查：
 
 - [Makefile](../Makefile) 的 `KERNEL_SECTORS`。
 - [src/boot/boot.asm](../src/boot/boot.asm) 的 `KERNEL_SECTORS`。

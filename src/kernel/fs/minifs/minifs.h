@@ -7,7 +7,7 @@
 
 enum {
     MINIFS_LBA_START = 512,
-    MINIFS_SECTORS = 256,
+    MINIFS_SECTORS = 512,
 };
 
 int minifs_mount(void);

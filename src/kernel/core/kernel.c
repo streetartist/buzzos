@@ -47,6 +47,8 @@ void _start(void) {
     vfs_mkdir("/bin");
     ramfs_register("/hello", initrd_hello_data, INITRD_HELLO_SIZE);
     ramfs_register("/bin/sh", initrd_bin_sh_data, INITRD_BIN_SH_SIZE);
+    ramfs_register("/bin/nano", initrd_bin_nano_data, INITRD_BIN_NANO_SIZE);
+    ramfs_register("/bin/basm", initrd_bin_basm_data, INITRD_BIN_BASM_SIZE);
     net_init();
     vga_init();
     vga_set_color(0x0F, 0x00);

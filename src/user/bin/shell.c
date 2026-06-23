@@ -1,8 +1,23 @@
 #include "libc.h"
 
 #define LINE_MAX 128
+#define HISTORY_MAX 8
+
+#define CTRL_C 0x03
+
+enum {
+    KEY_UP = 256,
+    KEY_DOWN,
+    KEY_RIGHT,
+    KEY_LEFT,
+    KEY_HOME,
+    KEY_END,
+    KEY_DELETE,
+};
 
 static int futex_demo_word;
+static char history[HISTORY_MAX][LINE_MAX];
+static int history_len;
 
 static int starts_with(const char *s, const char *p) {
     while (*p) {
@@ -80,40 +95,214 @@ static void prompt(void) {
     printf("\nbuzzos:%s> ", cwd);
 }
 
+static int read_raw_blocking(void) {
+    unsigned char c;
+    for (;;) {
+        int n = read(0, &c, 1);
+        if (n > 0)
+            return c;
+        yield();
+    }
+}
+
+static int read_raw_poll(void) {
+    unsigned char c;
+    int n = read(0, &c, 1);
+    if (n > 0)
+        return c;
+    return -1;
+}
+
+static int read_key(void) {
+    int c = read_raw_blocking();
+    if (c != 0x1B)
+        return c;
+
+    int c1 = -1;
+    for (int i = 0; i < 20 && c1 < 0; i++) {
+        c1 = read_raw_poll();
+        if (c1 < 0)
+            yield();
+    }
+    if (c1 != '[')
+        return 0x1B;
+
+    int c2 = -1;
+    for (int i = 0; i < 20 && c2 < 0; i++) {
+        c2 = read_raw_poll();
+        if (c2 < 0)
+            yield();
+    }
+
+    switch (c2) {
+    case 'A': return KEY_UP;
+    case 'B': return KEY_DOWN;
+    case 'C': return KEY_RIGHT;
+    case 'D': return KEY_LEFT;
+    case 'H': return KEY_HOME;
+    case 'F': return KEY_END;
+    case '3': {
+        int c3 = read_raw_poll();
+        if (c3 == '~')
+            return KEY_DELETE;
+        return 0x1B;
+    }
+    default:
+        return 0x1B;
+    }
+}
+
+static void term_left(int count) {
+    while (count-- > 0)
+        write(1, "\x1B[D", 3);
+}
+
+static void term_right(int count) {
+    while (count-- > 0)
+        write(1, "\x1B[C", 3);
+}
+
+static void redraw_from(char *line, int len, int from, int target, int clear_extra) {
+    for (int i = from; i < len; i++)
+        putchar(line[i]);
+    if (clear_extra)
+        putchar(' ');
+
+    int printed = len - from + (clear_extra ? 1 : 0);
+    int keep = target - from;
+    if (printed > keep)
+        term_left(printed - keep);
+}
+
+static void replace_input_line(char *line, int *len, int *cursor, const char *src) {
+    int old_len = *len;
+    term_left(*cursor);
+
+    int n = 0;
+    while (src[n] && n < LINE_MAX - 1) {
+        line[n] = src[n];
+        n++;
+    }
+    line[n] = 0;
+    *len = n;
+    *cursor = n;
+
+    for (int i = 0; i < n; i++)
+        putchar(line[i]);
+    for (int i = n; i < old_len; i++)
+        putchar(' ');
+    if (old_len > n)
+        term_left(old_len - n);
+}
+
+static void history_add(const char *line) {
+    if (!line[0])
+        return;
+    if (history_len > 0 && strcmp(history[history_len - 1], line) == 0)
+        return;
+
+    if (history_len == HISTORY_MAX) {
+        for (int i = 1; i < HISTORY_MAX; i++)
+            strcpy(history[i - 1], history[i]);
+        history_len--;
+    }
+    strcpy(history[history_len++], line);
+}
+
 static int read_line(char *line, int size) {
     int len = 0;
+    int cursor = 0;
+    int hist_index = history_len;
     for (;;) {
-        char c;
-        int n = read(0, &c, 1);
-        if (n <= 0) {
-            yield();
-            continue;
-        }
+        int c = read_key();
         if (c == '\r')
             c = '\n';
+        if (c == CTRL_C) {
+            term_right(len - cursor);
+            puts("^C");
+            line[0] = 0;
+            return 0;
+        }
         if (c == '\n') {
+            term_right(len - cursor);
             putchar('\n');
             line[len] = 0;
             return len;
         }
+        if (c == KEY_LEFT) {
+            if (cursor > 0) {
+                cursor--;
+                term_left(1);
+            }
+            continue;
+        }
+        if (c == KEY_RIGHT) {
+            if (cursor < len) {
+                cursor++;
+                term_right(1);
+            }
+            continue;
+        }
+        if (c == KEY_HOME) {
+            term_left(cursor);
+            cursor = 0;
+            continue;
+        }
+        if (c == KEY_END) {
+            term_right(len - cursor);
+            cursor = len;
+            continue;
+        }
+        if (c == KEY_UP) {
+            if (history_len > 0 && hist_index > 0) {
+                hist_index--;
+                replace_input_line(line, &len, &cursor, history[hist_index]);
+            }
+            continue;
+        }
+        if (c == KEY_DOWN) {
+            if (hist_index < history_len - 1) {
+                hist_index++;
+                replace_input_line(line, &len, &cursor, history[hist_index]);
+            } else if (hist_index < history_len) {
+                hist_index = history_len;
+                replace_input_line(line, &len, &cursor, "");
+            }
+            continue;
+        }
         if (c == '\b' || c == 0x7F) {
-            if (len > 0) {
+            if (cursor > 0) {
+                for (int i = cursor; i < len; i++)
+                    line[i - 1] = line[i];
                 len--;
-                putchar('\b');
-                putchar(' ');
-                putchar('\b');
+                cursor--;
+                term_left(1);
+                redraw_from(line, len, cursor, cursor, 1);
+            }
+            continue;
+        }
+        if (c == KEY_DELETE) {
+            if (cursor < len) {
+                for (int i = cursor + 1; i < len; i++)
+                    line[i - 1] = line[i];
+                len--;
+                redraw_from(line, len, cursor, cursor, 1);
             }
             continue;
         }
         if (c >= 32 && c < 127 && len < size - 1) {
-            line[len++] = c;
-            putchar(c);
+            for (int i = len; i > cursor; i--)
+                line[i] = line[i - 1];
+            line[cursor] = (char)c;
+            len++;
+            redraw_from(line, len, cursor, cursor + 1, 0);
+            cursor++;
         }
     }
 }
 
 static void cmd_help(void) {
-    puts("ls cd pwd stat cat mkdir rmdir touch write rm mv ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help");
+    puts("ls cd pwd stat cat mkdir rmdir touch write rm mv nano basm ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help");
 }
 
 static void cmd_ls(const char *path) {
@@ -239,6 +428,62 @@ static void cmd_exec(const char *args) {
     int status = 0;
     waitpid(pid, &status, 0);
     printf("[exec] exited %d\n", status);
+}
+
+static void cmd_nano(const char *path) {
+    while (*path == ' ')
+        path++;
+    if (!path[0]) {
+        puts("nano: usage: nano <file>");
+        return;
+    }
+
+    char *argv[2];
+    argv[0] = "/bin/nano";
+    argv[1] = (char *)path;
+    int pid = spawn_process_args("/bin/nano", argv, 2, 0);
+    if (pid < 0) {
+        puts("nano: failed");
+        return;
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    printf("[nano] exited %d\n", status);
+}
+
+static void cmd_basm(const char *args) {
+    char local[128];
+    int n = 0;
+    while (args[n] && n < (int)sizeof(local) - 1) {
+        local[n] = args[n];
+        n++;
+    }
+    local[n] = 0;
+    trim_right(local);
+
+    char *argsv[2];
+    int argn = split_args(local, argsv, 2);
+    if (argn < 1) {
+        puts("basm: usage: basm <input.asm> [output]");
+        return;
+    }
+
+    char *argv[3];
+    argv[0] = "/bin/basm";
+    argv[1] = argsv[0];
+    if (argn >= 2)
+        argv[2] = argsv[1];
+
+    int pid = spawn_process_args("/bin/basm", argv, argn + 1, 0);
+    if (pid < 0) {
+        puts("basm: failed");
+        return;
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    printf("[basm] exited %d\n", status);
 }
 
 static void cmd_wait(const char *arg) {
@@ -526,6 +771,10 @@ static void execute(char *line) {
         if (split_args(local, argv, 2) != 2 || rename(argv[0], argv[1]) < 0)
             puts("mv: failed");
     }
+    else if (starts_with(line, "nano ")) cmd_nano(line + 5);
+    else if (starts_with(line, "nano")) cmd_nano("");
+    else if (starts_with(line, "basm ")) cmd_basm(line + 5);
+    else if (starts_with(line, "basm")) cmd_basm("");
     else if (starts_with(line, "exec ")) cmd_exec(line + 5);
     else if (starts_with(line, "wait ")) cmd_wait(line + 5);
     else if (starts_with(line, "wait")) cmd_wait("");
@@ -548,6 +797,8 @@ int main(int argc, char **argv) {
     for (;;) {
         prompt();
         read_line(line, sizeof(line));
+        trim_right(line);
+        history_add(line);
         execute(line);
     }
 }

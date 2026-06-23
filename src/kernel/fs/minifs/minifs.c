@@ -5,9 +5,12 @@
 
 #define MINIFS_MAGIC       0x5346424Du /* MBFS */
 #define MINIFS_BLOCK_SIZE  512
-#define MINIFS_INODES      64
-#define MINIFS_BLOCKS      192
+#define MINIFS_INODES      128
+#define MINIFS_BLOCKS      (MINIFS_SECTORS - 1 - MINIFS_INODES - 1)
 #define MINIFS_DIRECT      8
+#define MINIFS_INDIRECT_ENTRIES (MINIFS_BLOCK_SIZE / (int)sizeof(uint16_t))
+#define MINIFS_MAX_FILE_BLOCKS  (MINIFS_DIRECT + MINIFS_INDIRECT_ENTRIES)
+#define MINIFS_MAX_FILE_SIZE    ((size_t)MINIFS_MAX_FILE_BLOCKS * MINIFS_BLOCK_SIZE)
 #define MINIFS_ROOT_INO    1
 #define MINIFS_NAME_LEN    24
 
@@ -30,7 +33,11 @@ struct minifs_inode {
     uint16_t parent;
     uint32_t size;
     uint16_t block[MINIFS_DIRECT];
+    uint16_t indirect;
 };
+
+_Static_assert(MINIFS_BLOCKS <= MINIFS_BLOCK_SIZE, "minifs block bitmap must fit in one sector");
+_Static_assert(sizeof(struct minifs_inode) <= MINIFS_BLOCK_SIZE, "minifs inode must fit in one sector");
 
 struct minifs_dirent_disk {
     uint16_t ino;
@@ -182,21 +189,80 @@ static void free_inode_blocks(int ino) {
             inodes[ino].block[i] = 0;
         }
     }
+    if (inodes[ino].indirect) {
+        uint8_t sector[MINIFS_BLOCK_SIZE];
+        int indirect_block = inodes[ino].indirect - 1;
+        if (read_block(indirect_block, sector) == 0) {
+            uint16_t *entries = (uint16_t *)sector;
+            for (int i = 0; i < MINIFS_INDIRECT_ENTRIES; i++) {
+                if (entries[i])
+                    block_used[entries[i] - 1] = 0;
+            }
+        }
+        block_used[indirect_block] = 0;
+        inodes[ino].indirect = 0;
+    }
     inodes[ino].size = 0;
     flush_bitmap();
 }
 
-static int ensure_block(int ino, int logical) {
-    if (logical < 0 || logical >= MINIFS_DIRECT)
+static int block_for_logical(int ino, int logical) {
+    if (logical < 0 || logical >= MINIFS_MAX_FILE_BLOCKS)
         return -1;
-    if (!inodes[ino].block[logical]) {
+    if (logical < MINIFS_DIRECT) {
+        if (!inodes[ino].block[logical])
+            return -1;
+        return inodes[ino].block[logical] - 1;
+    }
+
+    if (!inodes[ino].indirect)
+        return -1;
+    uint8_t sector[MINIFS_BLOCK_SIZE];
+    if (read_block(inodes[ino].indirect - 1, sector) < 0)
+        return -1;
+    uint16_t *entries = (uint16_t *)sector;
+    int index = logical - MINIFS_DIRECT;
+    if (!entries[index])
+        return -1;
+    return entries[index] - 1;
+}
+
+static int ensure_block(int ino, int logical) {
+    if (logical < 0 || logical >= MINIFS_MAX_FILE_BLOCKS)
+        return -1;
+    if (logical < MINIFS_DIRECT) {
+        if (!inodes[ino].block[logical]) {
+            int b = alloc_block();
+            if (b < 0)
+                return -1;
+            inodes[ino].block[logical] = (uint16_t)(b + 1);
+            flush_inode(ino);
+        }
+        return inodes[ino].block[logical] - 1;
+    }
+
+    if (!inodes[ino].indirect) {
+        int table = alloc_block();
+        if (table < 0)
+            return -1;
+        inodes[ino].indirect = (uint16_t)(table + 1);
+        flush_inode(ino);
+    }
+
+    uint8_t sector[MINIFS_BLOCK_SIZE];
+    if (read_block(inodes[ino].indirect - 1, sector) < 0)
+        return -1;
+    uint16_t *entries = (uint16_t *)sector;
+    int index = logical - MINIFS_DIRECT;
+    if (!entries[index]) {
         int b = alloc_block();
         if (b < 0)
             return -1;
-        inodes[ino].block[logical] = (uint16_t)(b + 1);
-        flush_inode(ino);
+        entries[index] = (uint16_t)(b + 1);
+        if (write_block(inodes[ino].indirect - 1, sector) < 0)
+            return -1;
     }
-    return inodes[ino].block[logical] - 1;
+    return entries[index] - 1;
 }
 
 static int dir_entry_count(int dir_ino) {
@@ -208,9 +274,10 @@ static int dir_read_entry(int dir_ino, int index, struct minifs_dirent_disk *de)
     size_t off = (size_t)index * sizeof(*de);
     int logical = (int)(off / MINIFS_BLOCK_SIZE);
     int within = (int)(off % MINIFS_BLOCK_SIZE);
-    if (logical >= MINIFS_DIRECT || !inodes[dir_ino].block[logical])
+    int block = block_for_logical(dir_ino, logical);
+    if (block < 0)
         return -1;
-    if (read_block(inodes[dir_ino].block[logical] - 1, sector) < 0)
+    if (read_block(block, sector) < 0)
         return -1;
     *de = *(struct minifs_dirent_disk *)(sector + within);
     return 0;
@@ -630,9 +697,10 @@ int minifs_read(uint16_t ino, size_t *pos, void *buf, size_t count) {
         size_t off = *pos + done;
         int logical = (int)(off / MINIFS_BLOCK_SIZE);
         int within = (int)(off % MINIFS_BLOCK_SIZE);
-        if (logical >= MINIFS_DIRECT || !inodes[ino].block[logical])
+        int block = block_for_logical(ino, logical);
+        if (block < 0)
             break;
-        if (read_block(inodes[ino].block[logical] - 1, sector) < 0) {
+        if (read_block(block, sector) < 0) {
             minifs_unlock();
             return -1;
         }
@@ -655,12 +723,12 @@ int minifs_write(uint16_t ino, size_t *pos, const void *buf, size_t count) {
         minifs_unlock();
         return -1;
     }
-    if (*pos >= MINIFS_DIRECT * MINIFS_BLOCK_SIZE) {
+    if (*pos >= MINIFS_MAX_FILE_SIZE) {
         minifs_unlock();
         return -1;
     }
-    if (count > MINIFS_DIRECT * MINIFS_BLOCK_SIZE - *pos)
-        count = MINIFS_DIRECT * MINIFS_BLOCK_SIZE - *pos;
+    if (count > MINIFS_MAX_FILE_SIZE - *pos)
+        count = MINIFS_MAX_FILE_SIZE - *pos;
 
     uint8_t sector[512];
     const uint8_t *in = (const uint8_t *)buf;
