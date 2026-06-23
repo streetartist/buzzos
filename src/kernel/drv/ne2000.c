@@ -182,6 +182,13 @@ static int ne2000_send(struct netdev *dev, const void *data, size_t len) {
     /* Fire transmit */
     outb(IO + CR, CR_PAGE0 | CR_START | CR_TRANSMIT);
 
+    /* Wait for transmit complete — avoids Slirp race where response arrives
+     * before TX finishes and gets dropped with "Failed to send packet" */
+    if (wait_isr(ISR_PTX) < 0) {
+        serial_puts("[ne2000] tx timeout\n");
+    }
+    outb(IO + ISR, ISR_PTX);
+
     serial_puts("[ne2000] tx ok\n");
     return 0;
 }
