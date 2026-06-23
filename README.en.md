@@ -15,7 +15,7 @@ Chinese main README: [README.md](README.md)
 - 16-bit BIOS boot sector and transition to 32-bit protected mode.
 - GDT, IDT, exception handling, PIC, PIT timer, keyboard input, VGA text output, and serial output.
 - E820 memory detection, bitmap physical memory manager, paging, and user address spaces.
-- ELF32 user-program loader and a user-space `/bin/sh` shell.
+- ELF32 user-program loader and a user-space `/bin/sh` shell with Ctrl+C, left/right cursor movement, Home/End, Delete, and up/down command history.
 - User-space `nano` editor and small `basm` assembler for editing, assembling, and running simple assembly programs inside BuzzOS.
 - Preemptive scheduling, process/thread model, `spawn`, `join`, `sleep`, `waitpid`, and `kill`.
 - Syscall ABI for files, processes, directories, networking, IPC, and synchronization.
@@ -27,6 +27,8 @@ Chinese main README: [README.md](README.md)
   - directories, regular files, `mkdir`, `rmdir`, `unlink`, and `rename`
   - `stat`, `getdents`, `open(O_CREAT/O_TRUNC/O_APPEND)`, and `lseek`
   - fixed disk area, preserved by default across image rebuilds
+  - 128 inodes, 382 data blocks, direct blocks plus one indirect block
+  - maximum single-file size is about 132 KiB; the `/fs` area is 256 KiB
 - Block layer:
   - ATA PIO sector I/O
   - simple write-through block cache
@@ -144,6 +146,8 @@ exec /fs/demo
 
 In `nano`, `Ctrl+T` inserts a minimal assembly template, `Ctrl+S` saves, and `Ctrl+C` exits.
 
+`basm` is not full NASM. It is a small BuzzOS-focused assembler for learning and experiments. It supports a practical subset such as `bits/global/section/%define/equ/label`, `db/dd`, and `mov/xor/int/ret/nop/push/pop/call/jmp/jcc/add/sub/cmp`, and emits ELF32 files that the BuzzOS loader can execute directly.
+
 Filesystem test example:
 
 ```text
@@ -186,4 +190,7 @@ BuzzOS is intentionally small but structured to grow. It is not a complete Unix 
 - ATA/block cache: [src/kernel/block](src/kernel/block)
 - Network stack: [src/kernel/net/net.c](src/kernel/net/net.c)
 - User shell: [src/user/bin/shell.c](src/user/bin/shell.c)
+- Nano editor: [src/user/bin/nano.c](src/user/bin/nano.c)
+- In-OS assembler: [src/user/bin/basm.c](src/user/bin/basm.c)
 - User libc: [src/user/libc/libc.c](src/user/libc/libc.c)
+- Assembly tutorial: [docs/assembly-programming.md](docs/assembly-programming.md)

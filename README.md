@@ -15,7 +15,7 @@ English: [README.en.md](README.en.md)
 - 16 位 BIOS 启动扇区，进入 32 位保护模式。
 - GDT、IDT、异常处理、PIC、PIT timer、键盘输入、VGA 文本输出、串口输出。
 - E820 物理内存探测、bitmap PMM、分页、用户态地址空间。
-- ELF32 用户程序加载，用户态 `/bin/sh` shell。
+- ELF32 用户程序加载，用户态 `/bin/sh` shell，支持 Ctrl+C、左右移动光标、Home/End、Delete 和上下翻历史。
 - 用户态 `nano` 编辑器和 `basm` 小型汇编器，可在 BuzzOS 内编辑、汇编并运行简单汇编程序。
 - 抢占式任务调度，进程/线程模型，`spawn`、`join`、`sleep`、`waitpid`、`kill`。
 - 系统调用 ABI：文件、进程、目录、网络、IPC、同步等基础接口。
@@ -27,6 +27,8 @@ English: [README.en.md](README.en.md)
   - 目录、普通文件、`mkdir`、`rmdir`、`unlink`、`rename`
   - `stat`、`getdents`、`open(O_CREAT/O_TRUNC/O_APPEND)`、`lseek`
   - 固定磁盘区域，默认重建镜像时保留 `/fs`
+  - 128 个 inode，382 个数据块，直接块 + 一级 indirect block
+  - 单文件理论上限约 132 KiB，`/fs` 区域总大小 256 KiB
 - 块设备层：
   - ATA PIO 扇区读写
   - 简单 write-through block cache
@@ -144,6 +146,8 @@ exec /fs/demo
 
 `nano` 里可以按 `Ctrl+T` 插入一个最小汇编模板，`Ctrl+S` 保存，`Ctrl+C` 退出。
 
+`basm` 不是完整 NASM，而是面向 BuzzOS 教学和实验的小型 assembler。它支持 `bits/global/section/%define/equ/label`、`db/dd`、`mov/xor/int/ret/nop/push/pop/call/jmp/jcc/add/sub/cmp` 等常用子集，输出的是 BuzzOS loader 可直接执行的 ELF32 文件。
+
 文件系统测试示例：
 
 ```text
@@ -186,4 +190,7 @@ BuzzOS 当前是“小而可扩展”的实现，不是完整 Unix：
 - ATA/block cache: [src/kernel/block](src/kernel/block)
 - Network stack: [src/kernel/net/net.c](src/kernel/net/net.c)
 - User shell: [src/user/bin/shell.c](src/user/bin/shell.c)
+- Nano editor: [src/user/bin/nano.c](src/user/bin/nano.c)
+- In-OS assembler: [src/user/bin/basm.c](src/user/bin/basm.c)
 - User libc: [src/user/libc/libc.c](src/user/libc/libc.c)
+- Assembly tutorial: [docs/assembly-programming.md](docs/assembly-programming.md)
