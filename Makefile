@@ -21,6 +21,7 @@ KERNEL_SRCS := \
 	src/kernel/syscall/sys_proc.c \
 	src/kernel/syscall/sys_net.c \
 	src/kernel/syscall/sys_ipc.c \
+	src/kernel/syscall/sys_gfx.c \
 	src/kernel/fs/vfs.c \
 	src/kernel/fs/ramfs.c \
 	src/kernel/fs/devfs.c \
@@ -32,6 +33,7 @@ KERNEL_SRCS := \
 	src/kernel/net/netdev.c \
 	src/kernel/net/net.c \
 	src/kernel/drv/keyboard.c \
+	src/kernel/drv/mouse.c \
 	src/kernel/drv/timer.c \
 	src/kernel/drv/serial.c \
 	src/kernel/drv/vga.c \
@@ -81,8 +83,9 @@ USER_ELF := $(BUILD)/user/hello.elf
 SHELL_ELF := $(BUILD)/user/shell.elf
 NANO_ELF := $(BUILD)/user/nano.elf
 BASM_ELF := $(BUILD)/user/basm.elf
-USER_ELFS := $(USER_ELF) $(SHELL_ELF) $(NANO_ELF) $(BASM_ELF)
-USER_SRCS := src/user/bin/hello.c src/user/bin/shell.c src/user/bin/nano.c src/user/bin/basm.c
+GUI_ELF := $(BUILD)/user/gui.elf
+USER_ELFS := $(USER_ELF) $(SHELL_ELF) $(NANO_ELF) $(BASM_ELF) $(GUI_ELF)
+USER_SRCS := src/user/bin/hello.c src/user/bin/shell.c src/user/bin/nano.c src/user/bin/basm.c src/user/bin/gui.c
 USER_LIB  := src/user/libc/crt0.c src/user/libc/libc.c
 INITRD_H := src/kernel/initrd.h
 
@@ -144,6 +147,9 @@ $(BUILD)/user/nano.o: src/user/bin/nano.c src/user/libc/libc.h | $(BUILD)/user
 $(BUILD)/user/basm.o: src/user/bin/basm.c src/user/libc/libc.h | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c src/user/bin/basm.c -o $(BUILD)/user/basm.o
 
+$(BUILD)/user/gui.o: src/user/bin/gui.c src/user/libc/libc.h | $(BUILD)/user
+	$(CC) $(UCFLAGS) -c src/user/bin/gui.c -o $(BUILD)/user/gui.o
+
 $(USER_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/hello.o $(BUILD)/user/user.ld | $(BUILD)/user
 	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
 		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/hello.o
@@ -160,9 +166,13 @@ $(BASM_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/basm.o $(BU
 	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
 		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/basm.o
 
+$(GUI_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/gui.o $(BUILD)/user/user.ld | $(BUILD)/user
+	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
+		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/gui.o
+
 $(INITRD_H): $(USER_ELFS) tools/mkinitrd.py
 	python tools/mkinitrd.py /hello $(USER_ELF) /bin/sh $(SHELL_ELF) \
-		/bin/nano $(NANO_ELF) /bin/basm $(BASM_ELF) > $@
+		/bin/nano $(NANO_ELF) /bin/basm $(BASM_ELF) /bin/gui $(GUI_ELF) > $@
 
 .PHONY: user
 user: $(INITRD_H)

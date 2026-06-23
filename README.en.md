@@ -4,11 +4,20 @@ BuzzOS is a minimal i386 POSIX-like operating system for learning and experiment
 
 Chinese main README: [README.md](README.md)
 
-![image-20260623000416138](/pic/demo1.png)
-
-![image-20260623000538562](/pic/demo2.png)
-
-![image-20260623000641242](/pic/demo3.png)
+<table>
+  <tr>
+    <td><img src="/pic/demo1.png" alt="BuzzOS demo 1"></td>
+    <td><img src="/pic/demo2.png" alt="BuzzOS demo 2"></td>
+  </tr>
+  <tr>
+    <td><img src="/pic/demo3.png" alt="BuzzOS demo 3"></td>
+    <td><img src="/pic/demo4.png" alt="BuzzOS demo 4"></td>
+  </tr>
+  <tr>
+    <td><img src="/pic/demo5.png" alt="BuzzOS demo 5"></td>
+    <td><img src="/pic/demo6.png" alt="BuzzOS demo 6"></td>
+  </tr>
+</table>
 
 ## Current Features
 
@@ -17,12 +26,13 @@ Chinese main README: [README.md](README.md)
 - E820 memory detection, bitmap physical memory manager, paging, and user address spaces.
 - ELF32 user-program loader and a user-space `/bin/sh` shell with Ctrl+C, left/right cursor movement, Home/End, Delete, and up/down command history.
 - User-space `nano` editor and small `basm` assembler for editing, assembling, and running simple assembly programs inside BuzzOS.
+- User-space `gui` desktop using framebuffer blits, PS/2 mouse input, and graphics syscalls. It includes Paint, a built-in shell panel, and a `/fs/apps` GUI app launcher.
 - Preemptive scheduling, process/thread model, `spawn`, `join`, `sleep`, `waitpid`, and `kill`.
 - Syscall ABI for files, processes, directories, networking, IPC, and synchronization.
 - VFS with a mount table:
   - `/`: initrd/ramfs, including `/hello` and `/bin/sh`
   - `/dev`: standalone devfs with `console`, `serial`, and `null`
-  - `/fs`: persistent mini ext-like filesystem
+  - `/fs`: persistent mini ext-like filesystem; user-added GUI apps should live in `/fs/apps`
 - Mini filesystem:
   - directories, regular files, `mkdir`, `rmdir`, `unlink`, and `rename`
   - `stat`, `getdents`, `open(O_CREAT/O_TRUNC/O_APPEND)`, and `lseek`
@@ -114,6 +124,7 @@ rmdir <dir>
 touch <file>
 nano <file>
 basm <input.asm> [output]
+gui
 write <file> <text>
 rm <file>
 mv <old> <new>
@@ -148,6 +159,16 @@ In `nano`, `Ctrl+T` inserts a minimal assembly template, `Ctrl+S` saves, and `Ct
 
 `basm` is not full NASM. It is a small BuzzOS-focused assembler for learning and experiments. It supports a practical subset such as `bits/global/section/%define/equ/label`, `db/dd`, and `mov/xor/int/ret/nop/push/pop/call/jmp/jcc/add/sub/cmp`, and emits ELF32 files that the BuzzOS loader can execute directly.
 
+Graphics desktop:
+
+```text
+gui
+```
+
+It starts in APP MANAGER. Select Paint, Shell, or an external GUI program from `/fs/apps`. Paint draws with the mouse, and the GUI Shell supports `help`, `ls`, `cat`, `echo`, `apps`, and `run <path>`. Put ELF32 GUI programs in `/fs/apps/<name>` and launch them by clicking the app entry or running `run /fs/apps/<name>` from the GUI shell. In an app, `Esc` or `Ctrl+C` returns to the manager; from the manager it returns to the text shell.
+
+The current GUI is a user-space full-screen app manager, not a complete window system. The kernel only exposes VGA 13h graphics mode, framebuffer blits, PS/2 mouse state, and graphics syscalls; layout, Paint, the GUI Shell, external app launching, and the mouse cursor are implemented by the `/bin/gui` user program. This keeps the kernel small and gives BuzzOS a clear path toward a real GUI server later.
+
 Filesystem test example:
 
 ```text
@@ -167,6 +188,7 @@ BuzzOS is intentionally small but structured to grow. It is not a complete Unix 
 - The first socket layer still reuses a single global TCP connection state. It supports TCP client sockets, UDP datagrams, and ICMP echo.
 - Futex wait/wake currently uses yield-based waiting. The interface is in place, but it should move to scheduler-backed wait queues.
 - The mini filesystem is fixed-size, uses direct blocks plus one indirect block, and has no journal.
+- The GUI is currently a 320x200x256 full-screen user-space manager with Paint, a GUI Shell, mouse input, and `/fs/apps` app launching. It is not a concurrent multi-window desktop yet.
 - Syscall user-pointer validation is range-based, not full page-permission validation.
 - There is no `fork` / `execve`, permission model, dynamic linker, signal system, or mature network stack yet.
 
@@ -184,12 +206,15 @@ BuzzOS is intentionally small but structured to grow. It is not a complete Unix 
 - Kernel entry: [src/kernel/core/kernel.c](src/kernel/core/kernel.c)
 - Scheduler/processes: [src/kernel/sched/task.c](src/kernel/sched/task.c)
 - Syscalls: [src/kernel/syscall/syscall.c](src/kernel/syscall/syscall.c)
+- Graphics syscall: [src/kernel/syscall/sys_gfx.c](src/kernel/syscall/sys_gfx.c)
 - VFS core: [src/kernel/fs/vfs.c](src/kernel/fs/vfs.c)
 - Filesystem adapters: [src/kernel/fs/ramfs.c](src/kernel/fs/ramfs.c), [src/kernel/fs/devfs.c](src/kernel/fs/devfs.c), [src/kernel/fs/minifs_vfs.c](src/kernel/fs/minifs_vfs.c), [src/kernel/fs/pipefs.c](src/kernel/fs/pipefs.c)
 - Mini FS disk format: [src/kernel/fs/minifs/minifs.c](src/kernel/fs/minifs/minifs.c)
 - ATA/block cache: [src/kernel/block](src/kernel/block)
 - Network stack: [src/kernel/net/net.c](src/kernel/net/net.c)
+- VGA/text/graphics driver: [src/kernel/drv/vga.c](src/kernel/drv/vga.c)
 - User shell: [src/user/bin/shell.c](src/user/bin/shell.c)
+- GUI desktop: [src/user/bin/gui.c](src/user/bin/gui.c)
 - Nano editor: [src/user/bin/nano.c](src/user/bin/nano.c)
 - In-OS assembler: [src/user/bin/basm.c](src/user/bin/basm.c)
 - User libc: [src/user/libc/libc.c](src/user/libc/libc.c)

@@ -55,6 +55,15 @@ struct dirent {
     char d_name[24];
 };
 
+struct mouse_state {
+    int x;
+    int y;
+    int buttons;
+    int dx;
+    int dy;
+    uint32_t seq;
+};
+
 /* --- Syscalls --- */
 void exit(int code) __attribute__((noreturn));
 int  open(const char *path, int flags);
@@ -98,6 +107,13 @@ int  dns_resolve(const char *host, uint32_t *ip_out);
 int  net_info(uint8_t mac[6], uint32_t *ip_out);
 uint16_t htons(uint16_t v);
 uint16_t ntohs(uint16_t v);
+int  gfx_mode(int mode);
+int  gfx_clear(int color);
+int  gfx_putpixel(int x, int y, int color);
+int  gfx_fill_rect(int x, int y, int w, int h, int color);
+int  gfx_text(int x, int y, const char *s, int fg, int bg);
+int  fb_blit(int x, int y, int w, int h, const uint8_t *pixels);
+int  mouse_get(struct mouse_state *out);
 
 /* --- Threads --- */
 typedef void (*thread_fn)(void);

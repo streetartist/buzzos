@@ -3,7 +3,7 @@
 这份教程面向第一次打开 BuzzOS 仓库的人。目标不是只告诉你“怎么运行”，而是让你能沿着一条完整路径理解它：
 
 ```text
-BIOS -> boot sector -> 32-bit kernel -> user shell -> VFS/minifs -> network/socket -> IPC/sync
+BIOS -> boot sector -> 32-bit kernel -> user shell -> VFS/minifs -> network/socket -> IPC/sync -> GUI desktop
 ```
 
 读法建议：
@@ -12,7 +12,7 @@ BIOS -> boot sector -> 32-bit kernel -> user shell -> VFS/minifs -> network/sock
 - 想改功能：直接跳到对应章节，看源码入口和验证命令。
 - 出问题：先看第 18 章，里面列了常见错误和定位方式。
 
-BuzzOS 现在已经不是早期的“只会启动并写 VGA 字符”的骨架。当前版本有用户态 shell、多任务、系统调用、VFS、一个简单落盘文件系统、基础网络 socket、pipe 和 futex 风格同步接口。
+BuzzOS 现在已经不是早期的“只会启动并写 VGA 字符”的骨架。当前版本有用户态 shell、多任务、系统调用、VFS、一个简单落盘文件系统、基础网络 socket、pipe、futex 风格同步接口，以及可从 shell 启动的图形桌面。
 
 ---
 
@@ -51,7 +51,9 @@ BuzzOS 是一个教学型、极简但可扩展的 i386 POSIX-like OS。它的定
 - GDT、IDT、异常处理、PIC、PIT timer、键盘、VGA 文本输出、串口输出。
 - E820 物理内存探测、bitmap PMM、分页、用户态地址空间。
 - ELF32 用户程序加载。
-- 用户态 shell：`/bin/sh`。
+- 用户态 shell：`/bin/sh`，支持行内光标移动和命令历史。
+- 用户态程序：`nano`、`basm`、`gui`。
+- VGA 320x200x256 图形模式和基础绘图 syscall。
 - 抢占式调度，进程/线程模型。
 - 系统调用：文件、目录、进程、线程、网络、IPC、同步等基础接口。
 - VFS + mount table：
@@ -144,6 +146,7 @@ cd D:\Project\buzzos
 | [src/kernel/syscall/sys_proc.c](../src/kernel/syscall/sys_proc.c) | 进程、线程、调度相关 syscall |
 | [src/kernel/syscall/sys_net.c](../src/kernel/syscall/sys_net.c) | socket/network syscall |
 | [src/kernel/syscall/sys_ipc.c](../src/kernel/syscall/sys_ipc.c) | pipe、futex 等 IPC/同步 syscall |
+| [src/kernel/syscall/sys_gfx.c](../src/kernel/syscall/sys_gfx.c) | VGA 图形 syscall |
 | [src/kernel/fs/vfs.c](../src/kernel/fs/vfs.c) | VFS core：路径、mount table、fd/open file |
 | [src/kernel/fs/ramfs.c](../src/kernel/fs/ramfs.c) | `/` initrd/ramfs adapter |
 | [src/kernel/fs/devfs.c](../src/kernel/fs/devfs.c) | `/dev` 字符设备文件系统 |
@@ -154,10 +157,14 @@ cd D:\Project\buzzos
 | [src/kernel/block/cache.c](../src/kernel/block/cache.c) | 简单块缓存 |
 | [src/kernel/net/net.c](../src/kernel/net/net.c) | ARP/IP/ICMP/UDP/TCP/DNS/DHCP |
 | [src/kernel/drv/ne2000.c](../src/kernel/drv/ne2000.c) | NE2000 网卡驱动 |
+| [src/kernel/drv/vga.c](../src/kernel/drv/vga.c) | 文本 console 和 VGA 图形模式 |
 | [src/user/libc/crt0.c](../src/user/libc/crt0.c) | 用户程序入口 |
 | [src/user/libc/libc.c](../src/user/libc/libc.c) | 用户态 syscall wrapper 和小 libc |
 | [src/user/libc/libc.h](../src/user/libc/libc.h) | 用户态 API 声明 |
 | [src/user/bin/shell.c](../src/user/bin/shell.c) | 用户态 shell |
+| [src/user/bin/nano.c](../src/user/bin/nano.c) | 用户态编辑器 |
+| [src/user/bin/basm.c](../src/user/bin/basm.c) | BuzzOS 内置小型 assembler |
+| [src/user/bin/gui.c](../src/user/bin/gui.c) | 图形界面 demo |
 | [src/user/bin/hello.c](../src/user/bin/hello.c) | 多线程 demo 用户程序 |
 
 最重要的阅读顺序：
@@ -205,9 +212,9 @@ build/buzzos.img
 用户程序也在这个流程里构建：
 
 1. 编译 `src/user/libc/crt0.c`、`src/user/libc/libc.c`。
-2. 编译 `src/user/bin/hello.c` 和 `src/user/bin/shell.c`。
+2. 编译 `src/user/bin/hello.c`、`shell.c`、`nano.c`、`basm.c` 和 `gui.c`。
 3. 链接成 ELF32 用户程序。
-4. `tools/mkinitrd.py` 把 `/hello` 和 `/bin/sh` 写进 `src/kernel/initrd.h`。
+4. `tools/mkinitrd.py` 把 `/hello`、`/bin/sh`、`/bin/nano`、`/bin/basm` 和 `/bin/gui` 写进 `src/kernel/initrd.h`。
 5. 内核构建时把 initrd 作为静态数组编进 kernel。
 
 ### 3.2 常用 make 目标
@@ -293,7 +300,7 @@ help
 当前 shell 支持：
 
 ```text
-ls cd pwd stat cat mkdir rmdir touch write rm mv nano basm ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help
+ls cd pwd stat cat mkdir rmdir touch write rm mv nano basm gui ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help
 ```
 
 先做最小验证：
@@ -329,6 +336,14 @@ exec /fs/demo
 ```
 
 `nano` 里 `Ctrl+T` 插入最小汇编模板，`Ctrl+S` 保存，`Ctrl+C` 退出。
+
+也可以启动图形桌面：
+
+```text
+gui
+```
+
+进入 GUI 后先看到 APP MANAGER，用户选择 Paint、Shell 或 `/fs/apps` 里的外部 GUI 程序后才打开应用。Paint 可用鼠标绘图；GUI Shell 支持 `help`、`ls`、`cat`、`echo`、`apps` 和 `run <path>`；用户添加的 ELF32 GUI 程序放到 `/fs/apps` 后即可点击或 `run /fs/apps/<name>` 启动。应用内 `Esc` 或 `Ctrl+C` 返回管理器，管理器内再按一次返回文本 shell。
 
 `cd` 示例：
 

@@ -30,6 +30,14 @@ static int syscall3(int nr, int a1, int a2, int a3) {
     return ret;
 }
 
+static int syscall5(int nr, int a1, int a2, int a3, int a4, int a5) {
+    int ret;
+    __asm__ volatile("int $0x80" : "=a"(ret)
+                     : "a"(nr), "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5)
+                     : "memory");
+    return ret;
+}
+
 enum { SYS_EXIT=1, SYS_OPEN=2, SYS_CLOSE=3, SYS_READ=4, SYS_WRITE=5,
        SYS_DUP=16, SYS_DUP2=17, SYS_STAT=18, SYS_GETDENTS=19,
        SYS_SPAWN_PROC=20, SYS_PS=21, SYS_REBOOT=22, SYS_MKDIR=23,
@@ -37,7 +45,10 @@ enum { SYS_EXIT=1, SYS_OPEN=2, SYS_CLOSE=3, SYS_READ=4, SYS_WRITE=5,
        SYS_LSEEK=27, SYS_RMDIR=28, SYS_RENAME=29, SYS_SOCKET=30,
        SYS_CONNECT=31, SYS_SEND=32, SYS_RECV=33, SYS_CLOSESOCKET=34,
        SYS_DNS_RESOLVE=35, SYS_BIND=36, SYS_SENDTO=37, SYS_RECVFROM=38,
-       SYS_NETINFO=39, SYS_PIPE=40, SYS_FUTEX_WAIT=41, SYS_FUTEX_WAKE=42 };
+       SYS_NETINFO=39, SYS_PIPE=40, SYS_FUTEX_WAIT=41, SYS_FUTEX_WAKE=42,
+       SYS_GFX_MODE=43, SYS_GFX_CLEAR=44, SYS_GFX_PUTPIXEL=45,
+       SYS_GFX_FILL_RECT=46, SYS_GFX_TEXT=47, SYS_FB_BLIT=48,
+       SYS_MOUSE_GET=49 };
 
 void exit(int code) {
     syscall1(SYS_EXIT, code);
@@ -202,6 +213,34 @@ uint16_t htons(uint16_t v) {
 
 uint16_t ntohs(uint16_t v) {
     return htons(v);
+}
+
+int gfx_mode(int mode) {
+    return syscall1(SYS_GFX_MODE, mode);
+}
+
+int gfx_clear(int color) {
+    return syscall1(SYS_GFX_CLEAR, color);
+}
+
+int gfx_putpixel(int x, int y, int color) {
+    return syscall3(SYS_GFX_PUTPIXEL, x, y, color);
+}
+
+int gfx_fill_rect(int x, int y, int w, int h, int color) {
+    return syscall5(SYS_GFX_FILL_RECT, x, y, w, h, color);
+}
+
+int gfx_text(int x, int y, const char *s, int fg, int bg) {
+    return syscall5(SYS_GFX_TEXT, x, y, (int)(uintptr_t)s, fg, bg);
+}
+
+int fb_blit(int x, int y, int w, int h, const uint8_t *pixels) {
+    return syscall5(SYS_FB_BLIT, x, y, w, h, (int)(uintptr_t)pixels);
+}
+
+int mouse_get(struct mouse_state *out) {
+    return syscall1(SYS_MOUSE_GET, (int)(uintptr_t)out);
 }
 
 enum { SYS_SPAWN=6, SYS_YIELD=7, SYS_JOIN=8, SYS_SLEEP=9, SYS_KILL=10,

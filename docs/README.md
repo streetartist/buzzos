@@ -21,6 +21,7 @@
   - 13. 下一步要补的能力（按推荐顺序）
   - 15. 串口（COM1）输出（NEW）
   - 16. GDT 搬进 C（NEW）
+  - shell 启动 `gui` 桌面、VGA framebuffer syscall、鼠标输入和 `/fs/apps` 用户 GUI 程序
   - 附录 A-C：BIOS 初始寄存器、常用端口、QEMU 参数
 - 想写或改汇编：[BuzzOS 汇编编程教程](assembly-programming.md) — 从用户态 `int 0x80` 程序到 boot sector、ISR、syscall stub 和上下文切换。
   - 用户态纯汇编 ELF 程序

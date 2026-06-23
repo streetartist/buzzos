@@ -83,10 +83,17 @@ global irq_stub_33
 irq_stub_33:
     pusha
     xor eax, eax
+    in al, 0x64
+    test al, 0x01
+    jz .done
+    test al, 0x20
+    jnz .done
+    xor eax, eax
     in al, 0x60
     push eax
     call keyboard_handler
     add esp, 4
+.done:
     mov al, 0x20
     out 0x20, al
     popa
@@ -104,8 +111,37 @@ irq_stub_32:
     call timer_irq
     popa
     iret
+
 %assign i 34
-%rep 14
+%rep 10
+  DUMMY_IRQ i
+  %assign i i+1
+%endrep
+
+extern mouse_handler
+global irq_stub_44
+irq_stub_44:
+    pusha
+    xor eax, eax
+    in al, 0x64
+    test al, 0x01
+    jz .done
+    test al, 0x20
+    jz .done
+    xor eax, eax
+    in al, 0x60
+    push eax
+    call mouse_handler
+    add esp, 4
+.done:
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+    popa
+    iret
+
+%assign i 45
+%rep 3
   DUMMY_IRQ i
   %assign i i+1
 %endrep

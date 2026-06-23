@@ -302,7 +302,7 @@ static int read_line(char *line, int size) {
 }
 
 static void cmd_help(void) {
-    puts("ls cd pwd stat cat mkdir rmdir touch write rm mv nano basm ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help");
+    puts("ls cd pwd stat cat mkdir rmdir touch write rm mv nano basm gui ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help");
 }
 
 static void cmd_ls(const char *path) {
@@ -484,6 +484,20 @@ static void cmd_basm(const char *args) {
     int status = 0;
     waitpid(pid, &status, 0);
     printf("[basm] exited %d\n", status);
+}
+
+static void cmd_gui(void) {
+    char *argv[1];
+    argv[0] = "/bin/gui";
+    int pid = spawn_process_args("/bin/gui", argv, 1, 0);
+    if (pid < 0) {
+        puts("gui: failed");
+        return;
+    }
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    printf("[gui] exited %d\n", status);
 }
 
 static void cmd_wait(const char *arg) {
@@ -775,6 +789,7 @@ static void execute(char *line) {
     else if (starts_with(line, "nano")) cmd_nano("");
     else if (starts_with(line, "basm ")) cmd_basm(line + 5);
     else if (starts_with(line, "basm")) cmd_basm("");
+    else if (starts_with(line, "gui")) cmd_gui();
     else if (starts_with(line, "exec ")) cmd_exec(line + 5);
     else if (starts_with(line, "wait ")) cmd_wait(line + 5);
     else if (starts_with(line, "wait")) cmd_wait("");

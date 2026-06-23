@@ -4,6 +4,7 @@
 #include "gdt.h"
 #include "idt.h"
 #include "keyboard.h"
+#include "mouse.h"
 #include "net.h"
 #include "paging.h"
 #include "pmm.h"
@@ -43,12 +44,14 @@ void _start(void) {
     pmm_init();
     paging_init();
     keyboard_init();
+    mouse_init();
     vfs_init();
     vfs_mkdir("/bin");
     ramfs_register("/hello", initrd_hello_data, INITRD_HELLO_SIZE);
     ramfs_register("/bin/sh", initrd_bin_sh_data, INITRD_BIN_SH_SIZE);
     ramfs_register("/bin/nano", initrd_bin_nano_data, INITRD_BIN_NANO_SIZE);
     ramfs_register("/bin/basm", initrd_bin_basm_data, INITRD_BIN_BASM_SIZE);
+    ramfs_register("/bin/gui", initrd_bin_gui_data, INITRD_BIN_GUI_SIZE);
     net_init();
     vga_init();
     vga_set_color(0x0F, 0x00);

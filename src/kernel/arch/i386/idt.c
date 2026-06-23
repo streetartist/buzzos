@@ -82,6 +82,7 @@ extern void exc_stub_13(void);
 extern void exc_stub_14(void);
 extern void irq_stub_32(void);
 extern void irq_stub_33(void);
+extern void irq_stub_44(void);
 extern void syscall_stub(void);
 
 static const struct idt_gate_init early_gates[] = {
@@ -101,6 +102,7 @@ static const struct idt_gate_init early_gates[] = {
     {14, exc_stub_14, IDT_GATE_INT},
     {32, irq_stub_32, IDT_GATE_INT},
     {33, irq_stub_33, IDT_GATE_INT},
+    {44, irq_stub_44, IDT_GATE_INT},
     {SYSCALL_VECTOR_LEGACY, syscall_stub, IDT_GATE_INT_USER},
     {SYSCALL_VECTOR, syscall_stub, IDT_GATE_INT_USER},
 };
@@ -126,7 +128,7 @@ static void pic_remap(void) {
     outb(0xA1, 0x02); io_wait();
     outb(0x21, 0x01); io_wait();
     outb(0xA1, 0x01); io_wait();
-    outb(0x21, 0xFD);  /* unmask IRQ1 (keyboard) only */
+    outb(0x21, 0xFD);  /* unmask IRQ1; timer/mouse are enabled by drivers */
     outb(0xA1, 0xFF);  /* mask all slave */
 }
 
