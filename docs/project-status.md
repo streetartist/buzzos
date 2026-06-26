@@ -13,6 +13,9 @@ filesystem, and a user-space GUI app manager.
   `/fs/apps`.
 - Pseudo filesystems: `/dev`, persistent `/fs`, and read-only `/proc` status
   files, including process, thread, network, memory, mount, and sync views.
+- Project identity: `/proc/about`, text-shell `about`, GUI-shell `about`, and
+  `make report` expose the same compact project introduction and documentation
+  map.
 - Health interface: `/proc/health`, text-shell `health`, GUI-shell `health`,
   and `make report` all expose the same compact project health surface.
 - Interface matrix: `/proc/interfaces`, text-shell `interfaces`, GUI-shell
@@ -108,6 +111,7 @@ Inspect live kernel status from inside BuzzOS:
 ```text
 help proc
 ls /proc
+cat /proc/about
 cat /proc/tasks
 cat /proc/threads
 cat /proc/meminfo
@@ -118,6 +122,7 @@ cat /proc/net
 cat /proc/sync
 cat /proc/mounts
 fdstat
+about
 health
 interfaces
 ```

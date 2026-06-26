@@ -7,6 +7,7 @@
 
 enum {
     PROC_NODE_DIR = 0,
+    PROC_NODE_ABOUT,
     PROC_NODE_HEALTH,
     PROC_NODE_INTERFACES,
     PROC_NODE_TASKS,
@@ -24,6 +25,7 @@ struct proc_entry {
 };
 
 static const struct proc_entry proc_entries[] = {
+    { "about", PROC_NODE_ABOUT },
     { "health", PROC_NODE_HEALTH },
     { "interfaces", PROC_NODE_INTERFACES },
     { "tasks", PROC_NODE_TASKS },
@@ -112,6 +114,22 @@ static int proc_entry_count(void) {
     return (int)(sizeof(proc_entries) / sizeof(proc_entries[0]));
 }
 
+static int proc_about_text(char *buf, int cap) {
+    int pos = 0;
+    append_text(buf, &pos, cap, "name BuzzOS\n");
+    append_text(buf, &pos, cap, "kind lightweight-i386-posix-like-os\n");
+    append_text(buf, &pos, cap, "status experimental\n");
+    append_text(buf, &pos, cap, "arch i386\n");
+    append_text(buf, &pos, cap, "mode protected32\n");
+    append_text(buf, &pos, cap, "entrypoints shell,gui,procfs,fs,apps,report\n");
+    append_text(buf, &pos, cap, "docs README.md,README.en.md,docs/project-status.md\n");
+    append_text(buf, &pos, cap, "log CHANGELOG.md\n");
+    if (pos > cap - 1)
+        pos = cap - 1;
+    buf[pos] = 0;
+    return pos;
+}
+
 static int proc_health_text(char *buf, int cap) {
     struct pmm_info mem;
     struct fs_info fs;
@@ -166,6 +184,7 @@ static int proc_interfaces_text(char *buf, int cap) {
     int pos = 0;
     append_text(buf, &pos, cap, "NAME STATUS ENTRYPOINTS\n");
     append_text(buf, &pos, cap, "procfs stable /proc\n");
+    append_text(buf, &pos, cap, "about stable /proc/about,about,gui:about,make:report\n");
     append_text(buf, &pos, cap, "health stable /proc/health,health,gui:health,make:report\n");
     append_text(buf, &pos, cap, "interfaces stable /proc/interfaces,interfaces,gui:interfaces,make:report\n");
     append_text(buf, &pos, cap, "apps stable /fs/apps,apps,gui:apps,tools:gen_app_registry\n");
@@ -306,6 +325,8 @@ static int proc_fds_text(char *buf, int cap) {
 }
 
 static int proc_build_text(int node, char *buf, int cap) {
+    if (node == PROC_NODE_ABOUT)
+        return proc_about_text(buf, cap);
     if (node == PROC_NODE_HEALTH)
         return proc_health_text(buf, cap);
     if (node == PROC_NODE_INTERFACES)

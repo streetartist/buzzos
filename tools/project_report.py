@@ -180,6 +180,20 @@ def collect_procfs_entries():
     return rows
 
 
+def collect_project_identity():
+    procfs = read_text_if_exists("src/kernel/fs/procfs.c")
+    m = re.search(r"static\s+int\s+proc_about_text\(.*?\{(.*?)return\s+pos;", procfs, re.S)
+    rows = []
+    if m:
+        for line in re.findall(r'append_text\(buf,\s*&pos,\s*cap,\s*"([^"]+)\\n"\);', m.group(1)):
+            parts = line.split(" ", 1)
+            if len(parts) == 2:
+                rows.append({"item": parts[0], "value": parts[1]})
+    if not rows:
+        rows.append({"item": "/proc/about", "value": "missing"})
+    return rows
+
+
 def collect_health_interfaces():
     procfs = read_text_if_exists("src/kernel/fs/procfs.c")
     shell = read_text_if_exists("src/user/bin/shell.c")
@@ -313,6 +327,11 @@ def build_report():
     lines.append("")
     lines.append(f"Generated: {stamp}")
     lines.append("")
+
+    lines.append("## Project Identity")
+    lines.extend(table(["item", "value"], collect_project_identity()))
+    lines.append("")
+
     lines.append("## Image")
     lines.extend(table(["item", "value"], [
         {"item": "image", "value": f"{rel(image_path)} ({bytes_text(file_size(image_path))})"},
@@ -415,7 +434,7 @@ def build_report():
     lines.append("## Gates")
     lines.append("")
     lines.append("- `make verify` runs project checks, serial smoke with deterministic single/dual TCP socket coverage, minifs positive/negative/repair checks, and GUI smoke.")
-    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs and health diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
+    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
     lines.append("- `make fs-check-repair` verifies conservative minifs repair on disposable corrupted image copies.")
     lines.append("- `make report` writes this summary to `build/project-report.md`.")
     if headroom_status == "low":

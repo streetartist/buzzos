@@ -55,6 +55,9 @@ the local verification report at `build/project-report.md`.
   - `pipe(int fds[2])` with blocking read/write wakeups
   - shell examples: `echo hello | cat | cat`, `echo saved > /fs/out`, `cat < /fs/out`
   - `futex_wait` / `futex_wake`
+- Multi-interface project identity: `/proc/about`, the text-shell `about`
+  command, the GUI-shell `about` command, and `make report` expose the same
+  compact project introduction and documentation map.
 - Multi-interface health surface: `/proc/health`, the text-shell `health`
   command, the GUI-shell `health` command, and `make report` share one compact
   status vocabulary.
@@ -183,6 +186,7 @@ ls [path]
 cd [path]
 pwd
 stat <path>
+about
 health
 interfaces
 fsstat

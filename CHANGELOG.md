@@ -37,6 +37,9 @@ short log for reviewers and contributors; deeper design notes live under
 
 - Added `/proc` diagnostics for tasks, threads, memory, networking, sync
   waiters, file descriptors, and mounts.
+- Added a multi-interface project identity surface through `/proc/about`, the
+  text-shell `about` command, GUI-shell `about`, smoke coverage, and
+  `make report` project identity reporting.
 - Added a compact multi-interface health surface through `/proc/health`, the
   text-shell `health` command, GUI-shell `health`, smoke coverage, and
   `make report` interface reporting.

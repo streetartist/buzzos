@@ -7,6 +7,7 @@ system without adding a new syscall for every diagnostic.
 ## Files
 
 ```text
+/proc/about
 /proc/tasks
 /proc/threads
 /proc/health
@@ -17,6 +18,22 @@ system without adding a new syscall for every diagnostic.
 /proc/fds
 /proc/mounts
 ```
+
+`/proc/about` is the compact project identity surface:
+
+```text
+name BuzzOS
+kind lightweight-i386-posix-like-os
+status experimental
+arch i386
+mode protected32
+entrypoints shell,gui,procfs,fs,apps,report
+docs README.md,README.en.md,docs/project-status.md
+log CHANGELOG.md
+```
+
+The text shell exposes the same file through the `about` command. The GUI shell
+does the same, and `make report` renders it as the Project Identity table.
 
 `/proc/health` is the compact cross-interface health summary. It is the first
 status file to try when you want one screen of runtime state:
@@ -44,6 +61,7 @@ CLI, and the user GUI without adding another syscall.
 ```text
 NAME STATUS ENTRYPOINTS
 procfs stable /proc
+about stable /proc/about,about,gui:about,make:report
 health stable /proc/health,health,gui:health,make:report
 interfaces stable /proc/interfaces,interfaces,gui:interfaces,make:report
 apps stable /fs/apps,apps,gui:apps,tools:gen_app_registry
@@ -136,6 +154,7 @@ From the BuzzOS shell:
 
 ```text
 ls /proc
+cat /proc/about
 cat /proc/tasks
 cat /proc/threads
 cat /proc/health
@@ -145,6 +164,7 @@ cat /proc/fds
 cat /proc/net
 cat /proc/sync
 cat /proc/mounts
+about
 health
 interfaces
 fdstat

@@ -53,6 +53,7 @@ English: [README.en.md](README.en.md)
   - `pipe(int fds[2])`，支持阻塞读写唤醒
   - shell 示例：`echo hello | cat | cat`、`echo saved > /fs/out`、`cat < /fs/out`
   - `futex_wait` / `futex_wake`
+- 多接口项目介绍面：`/proc/about`、文本 shell `about`、GUI shell `about` 和 `make report` 暴露同一套轻量项目介绍与文档地图。
 - 多接口健康面板：`/proc/health`、文本 shell `health`、GUI shell `health` 和 `make report` 使用同一套轻量状态口径。
 - 多接口能力矩阵：`/proc/interfaces`、文本 shell `interfaces`、GUI shell `interfaces` 和 `make report` 暴露稳定/实验性入口。
 
@@ -160,6 +161,7 @@ ls [path]
 cd [path]
 pwd
 stat <path>
+about
 health
 interfaces
 fsstat
