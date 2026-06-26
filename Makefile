@@ -122,16 +122,19 @@ $(OBJDIR)/%.o: src/kernel/%.c | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJDIR)/core/kernel.o: $(INITRD_H) $(APP_REGISTRY_H)
-$(OBJDIR)/core/exec.o: src/kernel/arch/i386/user.h
-$(OBJDIR)/syscall/sys_proc.o: src/kernel/arch/i386/user.h
-$(OBJDIR)/syscall/syscall.o: src/kernel/syscall/syscall_internal.h
-$(OBJDIR)/syscall/sys_file.o: src/kernel/fs/minifs/minifs.h
+$(OBJDIR)/core/exec.o: src/kernel/arch/i386/user.h src/kernel/arch/i386/user_bounds.h
+$(OBJDIR)/syscall/sys_proc.o: src/kernel/arch/i386/user.h src/kernel/syscall/syscall_internal.h src/kernel/arch/i386/user_bounds.h
+$(OBJDIR)/syscall/syscall.o: src/kernel/syscall/syscall_internal.h src/kernel/arch/i386/user_bounds.h
+$(OBJDIR)/syscall/sys_net.o: src/kernel/syscall/syscall_internal.h src/kernel/arch/i386/user_bounds.h
+$(OBJDIR)/syscall/sys_file.o: src/kernel/fs/minifs/minifs.h src/kernel/syscall/syscall_internal.h src/kernel/arch/i386/user_bounds.h
+$(OBJDIR)/syscall/sys_gfx.o: src/kernel/syscall/syscall_internal.h src/kernel/arch/i386/user_bounds.h
 $(OBJDIR)/sched/task.o: src/kernel/syscall/sys_ipc.h
-$(OBJDIR)/syscall/sys_ipc.o: src/kernel/syscall/sys_ipc.h src/kernel/sched/task.h src/kernel/drv/timer.h
+$(OBJDIR)/syscall/sys_ipc.o: src/kernel/syscall/sys_ipc.h src/kernel/syscall/syscall_internal.h src/kernel/arch/i386/user_bounds.h src/kernel/sched/task.h src/kernel/drv/timer.h
 $(OBJDIR)/fs/minifs/minifs.o: src/kernel/fs/minifs/minifs.h
 $(OBJDIR)/fs/procfs.o: src/kernel/mm/pmm.h src/kernel/sched/task.h src/kernel/net/net.h src/kernel/syscall/sys_ipc.h
-$(OBJDIR)/core/elf.o: src/kernel/core/elf.h
-$(OBJDIR)/arch/i386/paging.o: src/kernel/arch/i386/paging.h src/kernel/mm/pmm.h
+$(OBJDIR)/net/net.o: src/kernel/net/net.h src/kernel/net/netdev.h src/kernel/sched/task.h
+$(OBJDIR)/core/elf.o: src/kernel/core/elf.h src/kernel/arch/i386/user_bounds.h
+$(OBJDIR)/arch/i386/paging.o: src/kernel/arch/i386/paging.h src/kernel/mm/pmm.h src/kernel/arch/i386/user_bounds.h
 $(OBJDIR)/mm/pmm.o: src/kernel/mm/pmm.h
 
 $(OBJDIR)/%.o-asm: src/kernel/%.asm | $(OBJDIR)

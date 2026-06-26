@@ -2,10 +2,7 @@
 #define BUZZOS_USER_H
 
 #include <stdint.h>
-
-enum {
-    USER_DEFAULT_STACK_TOP = 0x27F000,
-};
+#include "user_bounds.h"
 
 /* Enter ring 3 through a small trampoline that reloads user data segments
  * and jumps to the supplied entry point. Does not return. */

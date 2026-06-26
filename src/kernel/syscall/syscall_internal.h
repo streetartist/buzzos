@@ -3,13 +3,9 @@
 
 #include <stdint.h>
 #include "syscall.h"
+#include "user_bounds.h"
 
 typedef int (*syscall_handler_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
-
-enum {
-    USER_PTR_START = 0x001C0000u,
-    USER_PTR_END   = 0x00280000u,
-};
 
 int user_range_ok(uint32_t ptr, uint32_t len);
 int user_string_ok(const char *s);

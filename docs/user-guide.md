@@ -78,7 +78,10 @@ GUI 会进入 APP MANAGER。可用数字键或鼠标选择：
 - `1` Paint
 - `2` GUI Shell
 - `3` Help
-- `4` Apps
+- `4` 或 `Enter` 运行当前选中的 `/fs/apps` 程序
+- `Up/Down` 选择应用，`Left/Right` 滚动详情
+
+鼠标滚轮在应用列表上滚动选择，在详情面板上滚动详情内容。
 
 在 GUI 内，`Esc` 返回上一层；在管理器里再按 `Esc` 或 `Ctrl+C` 回到文本 shell。
 

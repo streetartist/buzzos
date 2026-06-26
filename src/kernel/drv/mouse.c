@@ -15,11 +15,14 @@ static volatile int mouse_y;
 static volatile int mouse_buttons;
 static volatile int mouse_dx;
 static volatile int mouse_dy;
+static volatile int mouse_wheel_total;
+static volatile uint32_t mouse_wheel_seq;
 static volatile uint32_t mouse_seq;
 static volatile int mouse_enabled;
 
-static uint8_t packet[3];
+static uint8_t packet[4];
 static int packet_index;
+static int packet_size;
 
 static int ps2_wait_write(void) {
     for (int i = 0; i < 100000; i++) {
@@ -74,22 +77,74 @@ static int ps2_write_cmd_byte(uint8_t cmd) {
 }
 
 static int mouse_send(uint8_t cmd) {
-    if (ps2_wait_write() < 0)
-        return -1;
-    outb(PS2_CMD, 0xD4);
-    if (ps2_wait_write() < 0)
-        return -1;
-    outb(PS2_DATA, cmd);
-    for (int i = 0; i < 100000; i++) {
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (ps2_wait_write() < 0)
+            return -1;
+        outb(PS2_CMD, 0xD4);
+        if (ps2_wait_write() < 0)
+            return -1;
+        outb(PS2_DATA, cmd);
+        for (int i = 0; i < 100000; i++) {
+            uint8_t status = inb(PS2_STATUS);
+            if ((status & 0x01) == 0)
+                continue;
+            uint8_t data = inb(PS2_DATA);
+            if ((status & 0x20) == 0)
+                continue;
+            if (data == 0xFA)
+                return 0;
+            if (data == 0xFE)
+                break;
+            return -1;
+        }
+    }
+    return -1;
+}
+
+static int mouse_read_response(uint8_t *out) {
+    for (int i = 0; i < 300000; i++) {
         uint8_t status = inb(PS2_STATUS);
         if ((status & 0x01) == 0)
             continue;
         uint8_t data = inb(PS2_DATA);
         if ((status & 0x20) == 0)
             continue;
-        return data == 0xFA ? 0 : -1;
+        if (data == 0xFA || data == 0xFE)
+            continue;
+        *out = data;
+        return 0;
     }
     return -1;
+}
+
+static int mouse_set_sample_rate(uint8_t rate) {
+    if (mouse_send(0xF3) < 0)
+        return -1;
+    return mouse_send(rate);
+}
+
+static int mouse_probe_wheel_sequence(uint8_t second_rate, uint8_t *id) {
+    if (mouse_set_sample_rate(200) < 0 ||
+        mouse_set_sample_rate(second_rate) < 0 ||
+        mouse_set_sample_rate(80) < 0)
+        return -1;
+    if (mouse_send(0xF2) < 0)
+        return -1;
+    return mouse_read_response(id);
+}
+
+static void mouse_try_wheel_mode(void) {
+    uint8_t id = 0;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (mouse_probe_wheel_sequence(100, &id) == 0 && (id == 3 || id == 4)) {
+            packet_size = 4;
+            return;
+        }
+        if (mouse_probe_wheel_sequence(200, &id) == 0 && (id == 3 || id == 4)) {
+            packet_size = 4;
+            return;
+        }
+    }
 }
 
 static void disable_mouse_port(void) {
@@ -117,9 +172,12 @@ void mouse_init(void) {
     mouse_buttons = 0;
     mouse_dx = 0;
     mouse_dy = 0;
+    mouse_wheel_total = 0;
+    mouse_wheel_seq = 0;
     mouse_seq = 0;
     mouse_enabled = 0;
     packet_index = 0;
+    packet_size = 3;
 
     uint32_t flags = irq_save();
     uint8_t old_cmd = 0;
@@ -151,6 +209,8 @@ void mouse_init(void) {
     (void)mouse_send(0xF5);     /* stop streaming while resetting */
     if (mouse_send(0xF6) < 0)   /* defaults */
         ok = 0;
+    if (ok)
+        mouse_try_wheel_mode();
     if (mouse_send(0xF4) < 0)   /* enable data reporting */
         ok = 0;
 
@@ -179,17 +239,23 @@ void mouse_handler(uint8_t byte) {
         return;
 
     packet[packet_index++] = byte;
-    if (packet_index < 3)
+    if (packet_index < packet_size)
         return;
     packet_index = 0;
 
     int buttons = packet[0] & 0x07;
     int dx = (int)(int8_t)packet[1];
     int dy = (int)(int8_t)packet[2];
+    int wheel = 0;
 
     if (packet[0] & 0xC0) {
         dx = 0;
         dy = 0;
+    }
+    if (packet_size == 4) {
+        wheel = packet[3] & 0x0F;
+        if (wheel & 0x08)
+            wheel -= 0x10;
     }
 
     int x = mouse_x + dx;
@@ -204,6 +270,10 @@ void mouse_handler(uint8_t byte) {
     mouse_buttons = buttons;
     mouse_dx = dx;
     mouse_dy = -dy;
+    if (wheel != 0) {
+        mouse_wheel_total += wheel;
+        mouse_wheel_seq++;
+    }
     mouse_seq++;
 }
 
@@ -216,4 +286,6 @@ void mouse_get_state(struct mouse_state *out) {
     out->dx = mouse_dx;
     out->dy = mouse_dy;
     out->seq = mouse_seq;
+    out->wheel = mouse_wheel_total;
+    out->wheel_seq = mouse_wheel_seq;
 }

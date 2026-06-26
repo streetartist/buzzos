@@ -31,7 +31,7 @@ filesystem, and a user-space GUI app manager.
 - Unified user GUI style: seeded apps share `src/user/libc/gui_style.h` for
   top bars, panels, buttons, text boxes, pointer drawing, and status colors.
 - App packaging: optional `.app` manifests provide `name`, `kind`, `version`,
-  `summary`, `state`, `source`, and `readme` metadata for the App Center.
+  `summary`, `state`, `source`, and `readme` metadata for the App Manager.
 - App registry: `tools/gen_app_registry.py` generates `src/kernel/app_registry.h`
   from app sidecar metadata so kernel seeding stays data-driven.
 - Host tooling: `make help` / `tools/workflow.py` lists the recommended local

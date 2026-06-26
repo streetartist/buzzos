@@ -35,25 +35,37 @@ if ($FsSectors -gt 0 -and -not $ResetFs -and (Test-Path $Out)) {
     $oldBytes = [IO.File]::ReadAllBytes((Resolve-Path $Out))
     $fsLength = $FsSectors * 512
 
-    function Test-MinifsSuper([byte[]]$Bytes, [int]$Sector) {
+    function Test-MinifsSuper([byte[]]$Bytes, [int]$Sector, [int]$ExpectedSectors) {
         $offset = $Sector * 512
-        if ($offset + 4 -gt $Bytes.Length) {
+        if ($Sector -lt 0 -or $offset + 16 -gt $Bytes.Length) {
             return $false
         }
-        return $Bytes[$offset] -eq 0x4D -and
+        $magicOk = $Bytes[$offset] -eq 0x4D -and
             $Bytes[$offset + 1] -eq 0x42 -and
             $Bytes[$offset + 2] -eq 0x46 -and
             $Bytes[$offset + 3] -eq 0x53
+        if (-not $magicOk) {
+            return $false
+        }
+        $inodeCount = [BitConverter]::ToUInt32($Bytes, $offset + 4)
+        $blockCount = [BitConverter]::ToUInt32($Bytes, $offset + 8)
+        $dataLba = [BitConverter]::ToUInt32($Bytes, $offset + 12)
+        if ($inodeCount -eq 0 -or $blockCount -eq 0 -or $inodeCount -gt ($ExpectedSectors - 2)) {
+            return $false
+        }
+        $expectedBlocks = [uint32]($ExpectedSectors - 1 - $inodeCount - 1)
+        $expectedDataLba = [uint32]($Sector + 1 + $inodeCount + 1)
+        return $blockCount -eq $expectedBlocks -and $dataLba -eq $expectedDataLba
     }
 
     function Find-MinifsStart([byte[]]$Bytes, [int]$PreferredSector, [int]$FsLength) {
-        if ((Test-MinifsSuper $Bytes $PreferredSector) -and
+        if ((Test-MinifsSuper $Bytes $PreferredSector $FsSectors) -and
             $Bytes.Length -ge (($PreferredSector * 512) + $FsLength)) {
             return $PreferredSector
         }
-        $lastSector = [Math]::Floor(($Bytes.Length - 4) / 512)
+        $lastSector = [Math]::Floor(($Bytes.Length - 16) / 512)
         for ($sector = 1; $sector -le $lastSector; $sector++) {
-            if ((Test-MinifsSuper $Bytes $sector) -and
+            if ((Test-MinifsSuper $Bytes $sector $FsSectors) -and
                 $Bytes.Length -ge (($sector * 512) + $FsLength)) {
                 return $sector
             }
@@ -66,7 +78,8 @@ if ($FsSectors -gt 0 -and -not $ResetFs -and (Test-Path $Out)) {
         $fsOffset = $oldFsStart * 512
         $fsBytes = [byte[]]::new($fsLength)
         [Array]::Copy($oldBytes, $fsOffset, $fsBytes, 0, $fsLength)
-        $newDataLba = [uint32]($FsStart + 1 + 128 + 1)
+        $inodeCount = [BitConverter]::ToUInt32($fsBytes, 4)
+        $newDataLba = [uint32]($FsStart + 1 + $inodeCount + 1)
         $dataLbaBytes = [BitConverter]::GetBytes($newDataLba)
         [Array]::Copy($dataLbaBytes, 0, $fsBytes, 12, 4)
         if ($oldFsStart -ne $FsStart) {

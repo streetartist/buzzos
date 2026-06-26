@@ -2,6 +2,8 @@
 #ifndef BUZZOS_APP_REGISTRY_H
 #define BUZZOS_APP_REGISTRY_H
 
+#include <stddef.h>
+
 struct app_seed_entry {
     const char *path;
     const void *data;

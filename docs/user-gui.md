@@ -29,8 +29,9 @@ The kernel also seeds:
 
 The GUI app manager filters `/fs/apps` by ELF magic, so text and manifest files
 can live beside executable user apps without appearing as launchable programs.
-Open `/bin/gui`, enter `APPS`, and select `GUIDEMO`; the detail panel shows the
+Run `gui` and select `GUIDEMO` in App Manager; the detail panel shows the
 manifest metadata, path, size, state file, and README path before launching it.
+The app list and detail panel both support mouse wheel scrolling.
 `NOTES` is a second user GUI app in the same directory. It provides a multiline
 text input area and saves text to `/fs/apps/notes.txt`.
 `FORMS` demonstrates a more application-like form with multiple focused
@@ -97,8 +98,8 @@ From the GUI:
 gui
 ```
 
-Then open `APPS`, select `GUIDEMO`, and press `RUN`.
-`NOTES`, `FORMS`, and `CALC` appear in the same App Center list.
+Then select `GUIDEMO` in App Manager and press `RUN`.
+`NOTES`, `FORMS`, and `CALC` appear in the same App Manager list.
 The built-in GUI shell accepts the same compact help topics, for example
 `help apps`, `help gui`, `help files`, `help proc`, and `help edit`.
 
@@ -147,9 +148,9 @@ source=src/user/bin/forms.c
 readme=/fs/apps/forms.readme
 ```
 
-The App Center currently uses `name`, `kind`, `version`, `summary`, and `state`
-for the detail panel. Unknown keys are ignored, so the format can grow without
-breaking older app manifests.
+The App Manager currently uses `name`, `kind`, `version`, `summary`, `state`,
+`source`, and `readme` for the detail panel. Unknown keys are ignored, so the
+format can grow without breaking older app manifests.
 
 At build time, app metadata lives beside the app source:
 

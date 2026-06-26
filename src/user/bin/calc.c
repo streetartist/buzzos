@@ -5,6 +5,8 @@
 #define CTRL_S 0x13
 #define CTRL_L 0x0C
 #define CALC_PATH "/fs/apps/calc.cfg"
+#define CALC_INT_MAX 2147483647
+#define CALC_INT_MIN (-2147483647 - 1)
 
 enum {
     KEY_ESC = 0x1B,
@@ -123,12 +125,12 @@ static void append_text(char *dst, const char *src, int cap) {
 static void append_int(char *dst, int v, int cap) {
     char tmp[12];
     int n = 0;
-    unsigned int u;
+    uint32_t u;
     if (v < 0) {
         append_char(dst, '-', cap);
-        u = (unsigned int)(-v);
+        u = 0u - (uint32_t)v;
     } else {
-        u = (unsigned int)v;
+        u = (uint32_t)v;
     }
     if (u == 0) {
         append_char(dst, '0', cap);
@@ -160,21 +162,83 @@ static void mark_dirty(void) {
 }
 
 static int parse_int_text(const char *s, int *out) {
-    int sign = 1;
-    int value = 0;
+    int negative = 0;
+    uint32_t value = 0;
+    uint32_t limit;
     int digits = 0;
     if (*s == '-') {
-        sign = -1;
+        negative = 1;
         s++;
     }
+    limit = negative ? 2147483648u : 2147483647u;
     while (*s >= '0' && *s <= '9') {
-        value = value * 10 + (*s - '0');
+        uint32_t digit = (uint32_t)(*s - '0');
+        if (value > (limit - digit) / 10u)
+            return 0;
+        value = value * 10u + digit;
         digits++;
         s++;
     }
     if (!digits || *s)
         return 0;
-    *out = sign * value;
+    if (negative) {
+        if (value == 2147483648u)
+            *out = CALC_INT_MIN;
+        else
+            *out = -(int)value;
+    } else {
+        *out = (int)value;
+    }
+    return 1;
+}
+
+static int checked_add(int a, int b, int *out) {
+    if ((b > 0 && a > CALC_INT_MAX - b) ||
+        (b < 0 && a < CALC_INT_MIN - b))
+        return 0;
+    *out = a + b;
+    return 1;
+}
+
+static int checked_sub(int a, int b, int *out) {
+    if ((b < 0 && a > CALC_INT_MAX + b) ||
+        (b > 0 && a < CALC_INT_MIN + b))
+        return 0;
+    *out = a - b;
+    return 1;
+}
+
+static int checked_mul(int a, int b, int *out) {
+    if (a == 0 || b == 0) {
+        *out = 0;
+        return 1;
+    }
+    if ((a == CALC_INT_MIN && b == -1) ||
+        (b == CALC_INT_MIN && a == -1))
+        return 0;
+    if (a > 0) {
+        if (b > 0) {
+            if (a > CALC_INT_MAX / b)
+                return 0;
+        } else if (b < CALC_INT_MIN / a) {
+            return 0;
+        }
+    } else {
+        if (b > 0) {
+            if (a < CALC_INT_MIN / b)
+                return 0;
+        } else if (a < CALC_INT_MAX / b) {
+            return 0;
+        }
+    }
+    *out = a * b;
+    return 1;
+}
+
+static int checked_div(int a, int b, int *out) {
+    if (a == CALC_INT_MIN && b == -1)
+        return 0;
+    *out = a / b;
     return 1;
 }
 
@@ -218,19 +282,35 @@ static void calculate_result(void) {
         copy_text(status_text, "TYPE INTEGER VALUES", sizeof(status_text));
         return;
     }
-    if (op == OP_ADD)
-        r = a + b;
-    else if (op == OP_SUB)
-        r = a - b;
-    else if (op == OP_MUL)
-        r = a * b;
-    else {
+    if (op == OP_ADD) {
+        if (!checked_add(a, b, &r)) {
+            copy_text(result_text, "OVERFLOW", sizeof(result_text));
+            copy_text(status_text, "INTEGER OVERFLOW", sizeof(status_text));
+            return;
+        }
+    } else if (op == OP_SUB) {
+        if (!checked_sub(a, b, &r)) {
+            copy_text(result_text, "OVERFLOW", sizeof(result_text));
+            copy_text(status_text, "INTEGER OVERFLOW", sizeof(status_text));
+            return;
+        }
+    } else if (op == OP_MUL) {
+        if (!checked_mul(a, b, &r)) {
+            copy_text(result_text, "OVERFLOW", sizeof(result_text));
+            copy_text(status_text, "INTEGER OVERFLOW", sizeof(status_text));
+            return;
+        }
+    } else {
         if (b == 0) {
             copy_text(result_text, "DIV ZERO", sizeof(result_text));
             copy_text(status_text, "B CANNOT BE ZERO", sizeof(status_text));
             return;
         }
-        r = a / b;
+        if (!checked_div(a, b, &r)) {
+            copy_text(result_text, "OVERFLOW", sizeof(result_text));
+            copy_text(status_text, "DIVISION OVERFLOW", sizeof(status_text));
+            return;
+        }
     }
 
     result_text[0] = 0;

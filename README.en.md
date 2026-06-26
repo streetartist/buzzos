@@ -33,7 +33,7 @@ the local verification report at `build/project-report.md`.
 - ELF32 user-program loader and a user-space `/bin/sh` shell with Ctrl+C, left/right cursor movement, Home/End, Delete, up/down command history, multi-stage pipelines, and basic redirection.
 - User-space `nano` editor and small `basm` assembler for editing, assembling, and running simple assembly programs inside BuzzOS.
 - User-space `gui` desktop using framebuffer blits, PS/2 mouse input, and graphics syscalls. It includes Paint, a built-in shell panel, and a `/fs/apps` GUI app launcher.
-- Seeded user GUI apps in `/fs/apps`: `guidemo` with a single-line textbox, `notes` with multiline editing, `forms` with multiple focused text boxes, and `calc` with two focused input boxes, saved state, and `.app` manifest metadata in the App Center.
+- Seeded user GUI apps in `/fs/apps`: `guidemo` with a single-line textbox, `notes` with multiline editing, `forms` with multiple focused text boxes, and `calc` with two focused input boxes, saved state, and `.app` manifest metadata in the App Manager.
 - Seeded user GUI apps share `src/user/libc/gui_style.h` for one unified UI style: shared top bars, panels, buttons, text boxes, pointer drawing, and status colors.
 - Preemptive scheduling, process/thread model, `spawn`, `join`, `sleep`, `waitpid`, and `kill`.
 - Syscall ABI for files, processes, directories, networking, IPC, and synchronization.
@@ -289,7 +289,7 @@ Graphics desktop:
 gui
 ```
 
-It starts in APP MANAGER. Select Paint, Shell, or an external GUI program from `/fs/apps`. Paint draws with the mouse, and the GUI Shell supports `help`, `about`, `health`, `limits`, `interfaces`, `fsinfo`, `ls`, `cat`, `echo`, `apps`, and `run <path>`. Put ELF32 GUI programs in `/fs/apps/<name>` and launch them by clicking the app entry or running `run /fs/apps/<name>` from the GUI shell. The seeded examples are:
+It starts in APP MANAGER. Select Paint, Shell, or an external GUI program from `/fs/apps`. The app list and detail panel support mouse wheel scrolling; `Up/Down` selects apps and `Left/Right` scrolls detail text. Paint draws with the mouse, and the GUI Shell supports `help`, `about`, `health`, `limits`, `interfaces`, `fsinfo`, `ls`, `cat`, `echo`, `apps`, and `run <path>`. Put ELF32 GUI programs in `/fs/apps/<name>` and launch them by clicking the app entry or running `run /fs/apps/<name>` from the GUI shell. The seeded examples are:
 
 - `guidemo`: buttons, color swatches, a focused single-line textbox, mouse input, and persistent state in `/fs/apps/guidemo.cfg`.
 - `notes`: a multiline text editor that saves to `/fs/apps/notes.txt`.
@@ -300,7 +300,7 @@ Each user GUI app has source-side metadata files such as
 `src/user/bin/forms.app`, `src/user/bin/forms.readme`, and optional
 `src/user/bin/forms.seed`. `tools/gen_app_registry.py` generates
 `src/kernel/app_registry.h` from those files so the kernel seeds `/fs/apps`
-from a compact data table. The App Center reads the `.app` manifest for its
+from a compact data table. The App Manager reads the `.app` manifest for its
 detail panel while still launching the ELF executable from disk.
 
 Create a small app scaffold on the host:

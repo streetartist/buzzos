@@ -1,0 +1,14 @@
+#ifndef BUZZOS_USER_BOUNDS_H
+#define BUZZOS_USER_BOUNDS_H
+
+enum {
+    USER_SPACE_START       = 0x001C0000u,
+    USER_LOAD_START        = 0x001C0000u,
+    USER_LOAD_END          = 0x00240000u,
+    USER_DEFAULT_STACK_TOP = 0x0027F000u,
+    USER_SPACE_END         = 0x00280000u,
+    USER_PTR_START         = 0x001C0000u,
+    USER_PTR_END           = 0x00280000u,
+};
+
+#endif /* BUZZOS_USER_BOUNDS_H */

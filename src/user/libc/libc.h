@@ -79,6 +79,8 @@ struct mouse_state {
     int dx;
     int dy;
     uint32_t seq;
+    int wheel;
+    uint32_t wheel_seq;
 };
 
 /* --- Syscalls --- */

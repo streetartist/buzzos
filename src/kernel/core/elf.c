@@ -1,9 +1,5 @@
 #include "elf.h"
-
-enum {
-    USER_LOAD_START = 0x001C0000u,
-    USER_LOAD_END   = 0x00240000u,
-};
+#include "user_bounds.h"
 
 static int add_overflows_u32(uint32_t a, uint32_t b, uint32_t *out) {
     if (b > 0xFFFFFFFFu - a)
