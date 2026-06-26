@@ -1,6 +1,7 @@
 #ifndef BUZZOS_ELF_H
 #define BUZZOS_ELF_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* ELF32 header (52 bytes) */
@@ -48,9 +49,8 @@ enum {
     PF_X        = 1,
 };
 
-/* Parse and load an ELF image from `buf`. Returns the entry point
- * virtual address, or 0 on error. The caller must ensure `buf` is a
- * complete ELF file in memory. */
-uint32_t elf_load(const uint8_t *buf);
+/* Parse, validate, and load an ELF image from `buf`. Returns the entry point
+ * virtual address, or 0 on error. */
+uint32_t elf_load(const uint8_t *buf, size_t size);
 
 #endif /* BUZZOS_ELF_H */

@@ -8,6 +8,8 @@ param(
     [switch]$ResetFs
 )
 
+$ErrorActionPreference = "Stop"
+
 $bootBytes = [IO.File]::ReadAllBytes((Resolve-Path $Boot))
 $kernelBytes = [IO.File]::ReadAllBytes((Resolve-Path $Kernel))
 $maxKernelBytes = $KernelSectors * 512
@@ -31,11 +33,45 @@ if ($FsSectors -gt 0 -and $FsStart -lt $kernelEndSector) {
 $fsBytes = $null
 if ($FsSectors -gt 0 -and -not $ResetFs -and (Test-Path $Out)) {
     $oldBytes = [IO.File]::ReadAllBytes((Resolve-Path $Out))
-    $fsOffset = $FsStart * 512
     $fsLength = $FsSectors * 512
-    if ($oldBytes.Length -ge ($fsOffset + $fsLength)) {
+
+    function Test-MinifsSuper([byte[]]$Bytes, [int]$Sector) {
+        $offset = $Sector * 512
+        if ($offset + 4 -gt $Bytes.Length) {
+            return $false
+        }
+        return $Bytes[$offset] -eq 0x4D -and
+            $Bytes[$offset + 1] -eq 0x42 -and
+            $Bytes[$offset + 2] -eq 0x46 -and
+            $Bytes[$offset + 3] -eq 0x53
+    }
+
+    function Find-MinifsStart([byte[]]$Bytes, [int]$PreferredSector, [int]$FsLength) {
+        if ((Test-MinifsSuper $Bytes $PreferredSector) -and
+            $Bytes.Length -ge (($PreferredSector * 512) + $FsLength)) {
+            return $PreferredSector
+        }
+        $lastSector = [Math]::Floor(($Bytes.Length - 4) / 512)
+        for ($sector = 1; $sector -le $lastSector; $sector++) {
+            if ((Test-MinifsSuper $Bytes $sector) -and
+                $Bytes.Length -ge (($sector * 512) + $FsLength)) {
+                return $sector
+            }
+        }
+        return -1
+    }
+
+    $oldFsStart = Find-MinifsStart $oldBytes $FsStart $fsLength
+    if ($oldFsStart -ge 0) {
+        $fsOffset = $oldFsStart * 512
         $fsBytes = [byte[]]::new($fsLength)
         [Array]::Copy($oldBytes, $fsOffset, $fsBytes, 0, $fsLength)
+        $newDataLba = [uint32]($FsStart + 1 + 128 + 1)
+        $dataLbaBytes = [BitConverter]::GetBytes($newDataLba)
+        [Array]::Copy($dataLbaBytes, 0, $fsBytes, 12, 4)
+        if ($oldFsStart -ne $FsStart) {
+            Write-Host "Preserved /fs from old LBA $oldFsStart -> new LBA $FsStart"
+        }
     }
 }
 
@@ -44,6 +80,7 @@ if ($outDir) {
     New-Item -ItemType Directory -Force $outDir | Out-Null
 }
 
+$fs = $null
 $fs = [IO.File]::Open($Out, [IO.FileMode]::Create, [IO.FileAccess]::Write)
 try {
     $fs.Write($bootBytes, 0, $bootBytes.Length)
@@ -69,7 +106,9 @@ try {
     }
 }
 finally {
-    $fs.Dispose()
+    if ($fs -ne $null) {
+        $fs.Dispose()
+    }
 }
 
 $totalSectors = if ($FsSectors -gt 0) { $FsStart + $FsSectors } else { $kernelEndSector }

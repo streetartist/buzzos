@@ -58,6 +58,8 @@ struct pipe_obj {
     size_t head;
     size_t tail;
     size_t count;
+    uint32_t read_waiters;
+    uint32_t write_waiters;
     uint8_t data[PIPE_BUFSZ];
 };
 
@@ -70,6 +72,7 @@ void ramfs_init(void);
 void devfs_init(void);
 void pipefs_init(void);
 void minifs_vfs_init(void);
+void procfs_init(void);
 
 int vfs_mount(const char *path, const struct fs_ops *ops);
 void vfs_lock(void);

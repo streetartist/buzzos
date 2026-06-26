@@ -48,7 +48,7 @@ enum { SYS_EXIT=1, SYS_OPEN=2, SYS_CLOSE=3, SYS_READ=4, SYS_WRITE=5,
        SYS_NETINFO=39, SYS_PIPE=40, SYS_FUTEX_WAIT=41, SYS_FUTEX_WAKE=42,
        SYS_GFX_MODE=43, SYS_GFX_CLEAR=44, SYS_GFX_PUTPIXEL=45,
        SYS_GFX_FILL_RECT=46, SYS_GFX_TEXT=47, SYS_FB_BLIT=48,
-       SYS_MOUSE_GET=49 };
+       SYS_MOUSE_GET=49, SYS_FSSTAT=50, SYS_FUTEX_WAIT_TIMEOUT=51 };
 
 void exit(int code) {
     syscall1(SYS_EXIT, code);
@@ -76,6 +76,10 @@ int dup2(int oldfd, int newfd) {
 
 int stat(const char *path, struct stat *st) {
     return syscall3(SYS_STAT, (int)(uintptr_t)path, (int)(uintptr_t)st, 0);
+}
+
+int fsstat(struct fs_info *info) {
+    return syscall1(SYS_FSSTAT, (int)(uintptr_t)info);
 }
 
 int getdents(int fd, struct dirent *ents, size_t count) {
@@ -283,6 +287,10 @@ int pipe(int fds[2]) {
 
 int futex_wait(int *addr, int expected) {
     return syscall2(SYS_FUTEX_WAIT, (int)(uintptr_t)addr, expected);
+}
+
+int futex_wait_timeout(int *addr, int expected, unsigned int timeout_ms) {
+    return syscall3(SYS_FUTEX_WAIT_TIMEOUT, (int)(uintptr_t)addr, expected, (int)timeout_ms);
 }
 
 int futex_wake(int *addr, int count) {

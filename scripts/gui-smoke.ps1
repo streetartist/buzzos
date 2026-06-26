@@ -1,0 +1,355 @@
+param(
+    [string]$Image = "build/buzzos.img",
+    [Alias("Qemu")]
+    [string]$QemuPath = "",
+    [string]$SerialLog = "build/serial-gui-smoke.log",
+    [string]$TestImage = "build/buzzos-gui-test.img",
+    [string]$OutDir = "build/gui-smoke",
+    [string]$PythonPath = "",
+    [int]$TimeoutSeconds = 45
+)
+
+$ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($QemuPath)) {
+    $QemuPath = $env:QEMU
+}
+if ([string]::IsNullOrWhiteSpace($QemuPath)) {
+    $QemuPath = "qemu-system-i386"
+}
+$QemuPath = $QemuPath.Trim('"')
+
+if ([string]::IsNullOrWhiteSpace($PythonPath)) {
+    $PythonPath = $env:PYTHON
+}
+if ([string]::IsNullOrWhiteSpace($PythonPath)) {
+    $PythonPath = "python"
+}
+
+function Get-FreeTcpPort {
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $port = $listener.LocalEndpoint.Port
+    $listener.Stop()
+    return $port
+}
+
+function Read-SerialLog {
+    if (!(Test-Path -LiteralPath $SerialLog)) {
+        return ""
+    }
+    try {
+        return Get-Content -LiteralPath $SerialLog -Raw -ErrorAction Stop
+    } catch {
+        return ""
+    }
+}
+
+function Fail-WithLog([string]$Message) {
+    $log = Read-SerialLog
+    $tailStart = [Math]::Max(0, $log.Length - [Math]::Min($log.Length, 3000))
+    throw "$Message`n$($log.Substring($tailStart))"
+}
+
+function Wait-ForLog([string]$Pattern, [int]$Seconds) {
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    do {
+        if ($script:qemuProcess -and $script:qemuProcess.HasExited) {
+            Fail-WithLog "QEMU exited early with code $($script:qemuProcess.ExitCode)."
+        }
+        Start-Sleep -Milliseconds 300
+        $log = Read-SerialLog
+    } until ($log -match $Pattern -or (Get-Date) -gt $deadline)
+
+    if ($log -notmatch $Pattern) {
+        Fail-WithLog "Timed out waiting for serial output: $Pattern"
+    }
+}
+
+function Send-Hmp([string]$Line) {
+    $script:writer.WriteLine($Line)
+    Start-Sleep -Milliseconds 65
+}
+
+function Key-Name([char]$Ch) {
+    switch ($Ch) {
+        " " { return "spc" }
+        "/" { return "slash" }
+        "-" { return "minus" }
+        "." { return "dot" }
+        "@" { return "shift-2" }
+        default { return [string]$Ch }
+    }
+}
+
+function Send-Key([string]$Name) {
+    Send-Hmp ("sendkey " + $Name)
+}
+
+function Capture-Screen([string]$Name, [string]$PpmPath, [string]$PngPath) {
+    $lastError = ""
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        Remove-Item -LiteralPath $PpmPath -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $PngPath -ErrorAction SilentlyContinue
+
+        if ($attempt -gt 1) {
+            Start-Sleep -Milliseconds 350
+        }
+        Send-Hmp ("screendump " + ($PpmPath -replace "\\", "/"))
+        $deadline = (Get-Date).AddSeconds(5)
+        $item = $null
+        do {
+            Start-Sleep -Milliseconds 100
+            $item = Get-Item -LiteralPath $PpmPath -ErrorAction SilentlyContinue
+        } until (($item -and $item.Length -gt 1000) -or (Get-Date) -gt $deadline)
+
+        if (!($item -and $item.Length -gt 1000)) {
+            $lastError = "missing screenshot file"
+            continue
+        }
+
+        Start-Sleep -Milliseconds 250
+        try {
+            Convert-And-Assert-Ppm $PpmPath $PngPath $Name -Quiet
+            return @{ Name = $Name; Ppm = $PpmPath; Png = $PngPath }
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+    }
+
+    Fail-WithLog "Could not capture a valid $Name screenshot after retries: $lastError"
+}
+
+function Type-Text([string]$Text) {
+    foreach ($ch in $Text.ToCharArray()) {
+        Send-Key (Key-Name $ch)
+    }
+}
+
+function Type-Command([string]$Text) {
+    Type-Text $Text
+    Send-Key "ret"
+    Start-Sleep -Milliseconds 1000
+}
+
+function Press-Many([string]$Key, [int]$Count) {
+    for ($i = 0; $i -lt $Count; $i++) {
+        Send-Key $Key
+    }
+}
+
+function Stop-QemuIfRunning {
+    if (!$script:qemuProcess) {
+        return
+    }
+    try {
+        $script:qemuProcess.Refresh()
+        if (!$script:qemuProcess.HasExited) {
+            $script:qemuProcess.Kill()
+            $script:qemuProcess.WaitForExit(5000) | Out-Null
+        }
+    } catch {
+        # Cleanup should not hide the real GUI smoke result.
+    }
+}
+
+function Convert-And-Assert-Ppm([string]$PpmPath, [string]$PngPath, [string]$Name, [switch]$Quiet) {
+    $python = @'
+import struct, sys, zlib
+
+ppm, png, name = sys.argv[1], sys.argv[2], sys.argv[3]
+
+with open(ppm, "rb") as f:
+    def token():
+        out = bytearray()
+        while True:
+            c = f.read(1)
+            if not c:
+                raise SystemExit(f"{name}: truncated ppm header")
+            if c == b"#":
+                f.readline()
+                continue
+            if c not in b" \t\r\n":
+                out.extend(c)
+                break
+        while True:
+            c = f.read(1)
+            if not c or c in b" \t\r\n":
+                break
+            out.extend(c)
+        return bytes(out)
+
+    if token() != b"P6":
+        raise SystemExit(f"{name}: not a binary PPM")
+    w = int(token())
+    h = int(token())
+    maxv = int(token())
+    if maxv != 255:
+        raise SystemExit(f"{name}: unsupported max value {maxv}")
+    data = f.read(w * h * 3)
+
+if w < 300 or h < 180 or len(data) != w * h * 3:
+    raise SystemExit(f"{name}: unexpected frame size {w}x{h}")
+
+step = max(1, (w * h) // 4096)
+unique = set()
+nonblack = 0
+for i in range(0, w * h, step):
+    rgb = data[i * 3:i * 3 + 3]
+    unique.add(rgb)
+    if rgb != b"\x00\x00\x00":
+        nonblack += 1
+
+if len(unique) < 8 or nonblack < 64:
+    raise SystemExit(f"{name}: frame looks blank or too uniform (unique={len(unique)}, nonblack={nonblack})")
+
+raw = b"".join(b"\x00" + data[y*w*3:(y+1)*w*3] for y in range(h))
+def chunk(kind, payload):
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff)
+
+with open(png, "wb") as f:
+    f.write(b"\x89PNG\r\n\x1a\n")
+    f.write(chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)))
+    f.write(chunk(b"IDAT", zlib.compress(raw, 9)))
+    f.write(chunk(b"IEND", b""))
+
+print(f"{name}: {w}x{h}, unique={len(unique)}, nonblack={nonblack}")
+'@
+    $output = $python | & $PythonPath - $PpmPath $PngPath $Name 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Image validation failed for $Name`n$output"
+    }
+    if (!$Quiet) {
+        $output | ForEach-Object { Write-Host $_ }
+    }
+}
+
+New-Item -ItemType Directory -Force $OutDir | Out-Null
+Copy-Item -LiteralPath $Image -Destination $TestImage -Force
+Remove-Item -LiteralPath $SerialLog -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $OutDir "*.ppm") -ErrorAction SilentlyContinue
+Remove-Item -Path (Join-Path $OutDir "*.png") -ErrorAction SilentlyContinue
+
+$monitorPort = Get-FreeTcpPort
+$qemuArgs = @(
+    "-drive", "format=raw,file=$TestImage",
+    "-serial", "file:$SerialLog",
+    "-display", "none",
+    "-monitor", "tcp:127.0.0.1:$monitorPort,server,nowait",
+    "-no-reboot",
+    "-netdev", "user,id=n0",
+    "-device", "ne2k_isa,netdev=n0,iobase=0x300,irq=10"
+)
+
+$script:qemuProcess = Start-Process -FilePath $QemuPath -ArgumentList $qemuArgs -WorkingDirectory (Get-Location) -PassThru -WindowStyle Hidden
+$monitor = $null
+$script:writer = $null
+$screens = @()
+
+try {
+    Wait-ForLog "buzzos:/> " $TimeoutSeconds
+
+    $monitor = [Net.Sockets.TcpClient]::new("127.0.0.1", $monitorPort)
+    $script:writer = [IO.StreamWriter]::new($monitor.GetStream(), [Text.Encoding]::ASCII)
+    $script:writer.NewLine = "`n"
+    $script:writer.AutoFlush = $true
+
+    Type-Command "gui"
+    Send-Key "4"
+    Start-Sleep -Milliseconds 900
+    $appsPpm = (Join-Path $OutDir "app-center.ppm")
+    $screens += Capture-Screen "app-center" $appsPpm (Join-Path $OutDir "app-center.png")
+    Send-Key "esc"
+    Start-Sleep -Milliseconds 250
+    Send-Key "esc"
+    Wait-ForLog "\[gui\] exited" 10
+
+    Type-Command "forms"
+    Press-Many "backspace" 24
+    Type-Text "abc"
+    Send-Key "home"
+    Type-Text "x"
+    Send-Key "end"
+    Type-Text "z"
+    Send-Key "left"
+    Send-Key "left"
+    Send-Key "delete"
+    Send-Key "tab"
+    Press-Many "backspace" 24
+    Type-Text "gui smoke"
+    Start-Sleep -Milliseconds 800
+    $formsPpm = (Join-Path $OutDir "forms-edit.ppm")
+    $screens += Capture-Screen "forms-edit" $formsPpm (Join-Path $OutDir "forms-edit.png")
+    Send-Key "esc"
+    Wait-ForLog "\[forms\] exited" 10
+
+    Type-Command "calc"
+    Press-Many "backspace" 24
+    Type-Text "12"
+    Send-Key "tab"
+    Press-Many "backspace" 24
+    Type-Text "7"
+    Send-Key "ret"
+    Start-Sleep -Milliseconds 800
+    $calcPpm = (Join-Path $OutDir "calc-edit.ppm")
+    $screens += Capture-Screen "calc-edit" $calcPpm (Join-Path $OutDir "calc-edit.png")
+    Send-Key "esc"
+    Wait-ForLog "\[calc\] exited" 10
+
+    Type-Command "notes"
+    Press-Many "backspace" 120
+    Type-Text "gui smoke notes"
+    Send-Key "ret"
+    Type-Text "saved"
+    Start-Sleep -Milliseconds 800
+    $notesPpm = (Join-Path $OutDir "notes-edit.ppm")
+    $screens += Capture-Screen "notes-edit" $notesPpm (Join-Path $OutDir "notes-edit.png")
+    Send-Key "esc"
+    Wait-ForLog "\[notes\] exited" 10
+
+    Type-Command "guidemo"
+    Send-Key "i"
+    Press-Many "backspace" 32
+    Type-Text "box"
+    Send-Key "home"
+    Type-Text "x"
+    Send-Key "end"
+    Type-Text "z"
+    Send-Key "ret"
+    Send-Key "s"
+    Start-Sleep -Milliseconds 800
+    $demoPpm = (Join-Path $OutDir "guidemo-edit.ppm")
+    $screens += Capture-Screen "guidemo-edit" $demoPpm (Join-Path $OutDir "guidemo-edit.png")
+    Send-Key "esc"
+    Wait-ForLog "\[guidemo\] exited" 10
+
+    $log = Read-SerialLog
+    if ($log -match "=== EXCEPTION ===") {
+        Fail-WithLog "QEMU reported a CPU exception."
+    }
+
+    foreach ($screen in $screens) {
+        if (!(Test-Path -LiteralPath $screen.Ppm)) {
+            Fail-WithLog "Missing screenshot: $($screen.Ppm)"
+        }
+        Convert-And-Assert-Ppm $screen.Ppm $screen.Png $screen.Name
+    }
+
+    Send-Hmp "quit"
+    if (!$script:qemuProcess.WaitForExit(5000)) {
+        Stop-QemuIfRunning
+    }
+
+    Write-Host "GUI smoke passed. Screenshots:"
+    foreach ($screen in $screens) {
+        Write-Host "  $($screen.Png)"
+    }
+} finally {
+    if ($script:writer) {
+        $script:writer.Dispose()
+    }
+    if ($monitor) {
+        $monitor.Dispose()
+    }
+    Stop-QemuIfRunning
+}

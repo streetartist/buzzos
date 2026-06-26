@@ -1,6 +1,47 @@
 #include "elf.h"
 
-uint32_t elf_load(const uint8_t *buf) {
+enum {
+    USER_LOAD_START = 0x001C0000u,
+    USER_LOAD_END   = 0x00240000u,
+};
+
+static int add_overflows_u32(uint32_t a, uint32_t b, uint32_t *out) {
+    if (b > 0xFFFFFFFFu - a)
+        return 1;
+    *out = a + b;
+    return 0;
+}
+
+static int file_range_ok(uint32_t offset, uint32_t len, size_t size) {
+    if ((size_t)offset > size)
+        return 0;
+    if ((size_t)len > size - (size_t)offset)
+        return 0;
+    return 1;
+}
+
+static int user_range_ok(uint32_t addr, uint32_t len) {
+    uint32_t end;
+    if (addr < USER_LOAD_START)
+        return 0;
+    if (add_overflows_u32(addr, len, &end))
+        return 0;
+    return end <= USER_LOAD_END;
+}
+
+static int entry_in_segment(uint32_t entry, const struct elf32_phdr *phdr) {
+    uint32_t end;
+    if (phdr->p_memsz == 0)
+        return 0;
+    if (add_overflows_u32(phdr->p_vaddr, phdr->p_memsz, &end))
+        return 0;
+    return entry >= phdr->p_vaddr && entry < end;
+}
+
+uint32_t elf_load(const uint8_t *buf, size_t size) {
+    if (!buf || size < sizeof(struct elf32_ehdr))
+        return 0;
+
     const struct elf32_ehdr *ehdr = (const struct elf32_ehdr *)buf;
 
     /* Verify ELF magic */
@@ -15,11 +56,44 @@ uint32_t elf_load(const uint8_t *buf) {
     if (ehdr->e_ident[5] != ELF_DATA2LSB) return 0;
     if (ehdr->e_type != ELF_ET_EXEC) return 0;
     if (ehdr->e_machine != ELF_EM_386) return 0;
+    if (ehdr->e_version != 1) return 0;
+    if (ehdr->e_ehsize != sizeof(struct elf32_ehdr)) return 0;
+    if (ehdr->e_phentsize != sizeof(struct elf32_phdr)) return 0;
+    if (ehdr->e_phnum == 0) return 0;
+
+    uint32_t phdr_bytes = (uint32_t)ehdr->e_phnum * (uint32_t)sizeof(struct elf32_phdr);
+    if (!file_range_ok(ehdr->e_phoff, phdr_bytes, size))
+        return 0;
+
+    int saw_load = 0;
+    int entry_ok = 0;
+
+    /* Validate all loadable segments before writing anything. */
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        const struct elf32_phdr *phdr =
+            (const struct elf32_phdr *)(buf + ehdr->e_phoff + i * sizeof(struct elf32_phdr));
+
+        if (phdr->p_type != PT_LOAD)
+            continue;
+
+        saw_load = 1;
+        if (phdr->p_filesz > phdr->p_memsz)
+            return 0;
+        if (!file_range_ok(phdr->p_offset, phdr->p_filesz, size))
+            return 0;
+        if (!user_range_ok(phdr->p_vaddr, phdr->p_memsz))
+            return 0;
+        if ((phdr->p_flags & PF_X) && entry_in_segment(ehdr->e_entry, phdr))
+            entry_ok = 1;
+    }
+
+    if (!saw_load || !entry_ok)
+        return 0;
 
     /* Load each PT_LOAD segment */
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
         const struct elf32_phdr *phdr =
-            (const struct elf32_phdr *)(buf + ehdr->e_phoff + i * ehdr->e_phentsize);
+            (const struct elf32_phdr *)(buf + ehdr->e_phoff + i * sizeof(struct elf32_phdr));
 
         if (phdr->p_type != PT_LOAD) continue;
 

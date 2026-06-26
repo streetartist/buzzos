@@ -3,6 +3,7 @@
 #include "paging.h"
 #include "pmm.h"
 #include "serial.h"
+#include "sys_ipc.h"
 #include "timer.h"
 #include "vfs.h"
 
@@ -261,8 +262,15 @@ static void schedule(void) {
 
     uint32_t now = timer_ticks();
     for (int i = 0; i < num_tasks; i++) {
-        if (tasks[i].state == TASK_SLEEPING && (int32_t)(now - tasks[i].wake_tick) >= 0)
+        if (tasks[i].state == TASK_SLEEPING && (int32_t)(now - tasks[i].wake_tick) >= 0) {
             tasks[i].state = TASK_READY;
+            tasks[i].wake_tick = 0;
+        }
+        if (tasks[i].state == TASK_BLOCKED && tasks[i].wake_tick &&
+            (int32_t)(now - tasks[i].wake_tick) >= 0) {
+            tasks[i].state = TASK_READY;
+            tasks[i].wake_tick = 0;
+        }
     }
 
     int next = -1;
@@ -399,14 +407,18 @@ static int process_waitable_child(int parent, int pid) {
 static void process_forget(int pid) {
     if (pid <= 0 || pid >= MAX_TASKS || !procs[pid].used)
         return;
-    task_reap_one(pid);
+
+    for (int i = 1; i < num_tasks; i++) {
+        if (task_process_owner(&tasks[i]) == pid && tasks[i].state == TASK_DEAD) {
+            task_reap_one(i);
+            tasks[i].fd_owner = -1;
+            tasks[i].proc_id = -1;
+            tasks[i].wake_tick = 0;
+        }
+    }
     procs[pid].used = 0;
     procs[pid].state = PROC_UNUSED;
     procs[pid].exit_code = 0;
-    if (pid < num_tasks && tasks[pid].state == TASK_DEAD) {
-        tasks[pid].fd_owner = -1;
-        tasks[pid].proc_id = -1;
-    }
 }
 
 int task_wait_pid(int pid, int *status, int options) {
@@ -466,7 +478,9 @@ int task_kill(int id) {
     __asm__ volatile("cli");
     for (int i = 1; i < num_tasks; i++) {
         if (task_process_owner(&tasks[i]) == owner || i == id) {
+            futex_cancel_task_locked(i);
             tasks[i].exit_code = -1;
+            tasks[i].wake_tick = 0;
             tasks[i].state = TASK_DEAD;
         }
     }
@@ -501,8 +515,6 @@ static void dump_u32(void (*putc)(char), uint32_t v) {
 }
 
 void task_dump(void (*putc)(char), int show_dead) {
-    task_reap_dead();
-
     dump_str(putc, "PID  STATE    OUT    CODE  NAME\n");
     for (int pid = 0; pid < MAX_TASKS; pid++) {
         if (!procs[pid].used)
@@ -518,6 +530,7 @@ void task_dump(void (*putc)(char), int show_dead) {
             if (tasks[i].state == TASK_RUNNING) { state = TASK_RUNNING; break; }
             if (tasks[i].state == TASK_READY) state = TASK_READY;
             else if (state == TASK_DEAD && tasks[i].state == TASK_SLEEPING) state = TASK_SLEEPING;
+            else if (state == TASK_DEAD && tasks[i].state == TASK_BLOCKED) state = TASK_BLOCKED;
         }
         if (procs[pid].state == PROC_ZOMBIE)
             dump_str(putc, "ZOMBIE   ");
@@ -527,12 +540,45 @@ void task_dump(void (*putc)(char), int show_dead) {
             dump_str(putc, "READY    ");
         else if (state == TASK_SLEEPING)
             dump_str(putc, "SLEEP    ");
+        else if (state == TASK_BLOCKED)
+            dump_str(putc, "BLOCKED  ");
         else
             dump_str(putc, "UNKNOWN  ");
         dump_str(putc, procs[pid].console_silent ? "null   " : "tty    ");
         dump_u32(putc, (uint32_t)procs[pid].exit_code);
         dump_str(putc, "     ");
         dump_str(putc, procs[pid].name);
+        putc('\n');
+    }
+}
+
+static void dump_task_state(void (*putc)(char), int state) {
+    if (state == TASK_RUNNING)
+        dump_str(putc, "RUNNING  ");
+    else if (state == TASK_READY)
+        dump_str(putc, "READY    ");
+    else if (state == TASK_SLEEPING)
+        dump_str(putc, "SLEEP    ");
+    else if (state == TASK_BLOCKED)
+        dump_str(putc, "BLOCKED  ");
+    else if (state == TASK_DEAD)
+        dump_str(putc, "DEAD     ");
+    else
+        dump_str(putc, "UNKNOWN  ");
+}
+
+void task_dump_threads(void (*putc)(char), int show_dead) {
+    dump_str(putc, "TID  PID  STATE    OUT    NAME\n");
+    for (int i = 0; i < num_tasks; i++) {
+        if (!show_dead && tasks[i].state == TASK_DEAD)
+            continue;
+        dump_u32(putc, (uint32_t)i);
+        dump_str(putc, "    ");
+        dump_u32(putc, (uint32_t)task_process_owner(&tasks[i]));
+        dump_str(putc, "    ");
+        dump_task_state(putc, tasks[i].state);
+        dump_str(putc, tasks[i].console_silent ? "null   " : "tty    ");
+        dump_str(putc, tasks[i].name);
         putc('\n');
     }
 }
@@ -561,6 +607,20 @@ int task_dump_text(char *buf, int size, int show_dead) {
     return n;
 }
 
+int task_dump_threads_text(char *buf, int size, int show_dead) {
+    if (!buf || size <= 0)
+        return -1;
+    dump_buf_ptr = buf;
+    dump_buf_pos = 0;
+    dump_buf_size = size;
+    task_dump_threads(dump_buf_putc, show_dead);
+    int n = dump_buf_pos;
+    if (n > size - 1)
+        n = size - 1;
+    buf[n] = 0;
+    return n;
+}
+
 void task_exit(void) {
     task_exit_code(0);
 }
@@ -568,7 +628,9 @@ void task_exit(void) {
 void task_exit_code(int code) {
     __asm__ volatile("cli");
     int owner = task_process_owner(current_task);
+    futex_cancel_task_locked(current_task->id);
     current_task->exit_code = code;
+    current_task->wake_tick = 0;
     current_task->state = TASK_DEAD;
     if (owner > 0 && owner < MAX_TASKS && procs[owner].used &&
         !process_has_live_tasks(owner)) {
@@ -585,4 +647,37 @@ void task_sleep_until(uint32_t wake_tick) {
     current_task->wake_tick = wake_tick;
     current_task->state = TASK_SLEEPING;
     schedule();
+}
+
+void task_prepare_block_current(uint32_t wake_tick) {
+    if (!current_task || current_task->id == 0)
+        return;
+    current_task->wake_tick = wake_tick;
+    current_task->state = TASK_BLOCKED;
+}
+
+void task_block_current(void) {
+    if (!current_task || current_task->id == 0)
+        return;
+    __asm__ volatile("cli");
+    task_prepare_block_current(0);
+    schedule();
+}
+
+void task_block_current_until(uint32_t wake_tick) {
+    if (!current_task || current_task->id == 0)
+        return;
+    __asm__ volatile("cli");
+    task_prepare_block_current(wake_tick ? wake_tick : 1);
+    schedule();
+}
+
+int task_wake(int id) {
+    if (id <= 0 || id >= num_tasks)
+        return 0;
+    if (tasks[id].state != TASK_BLOCKED)
+        return 0;
+    tasks[id].wake_tick = 0;
+    tasks[id].state = TASK_READY;
+    return 1;
 }

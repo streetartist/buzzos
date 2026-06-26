@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 enum {
-    USER_DEFAULT_STACK_TOP = 0x22F000,
+    USER_DEFAULT_STACK_TOP = 0x27F000,
 };
 
 /* Enter ring 3 through a small trampoline that reloads user data segments

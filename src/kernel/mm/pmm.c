@@ -2,14 +2,18 @@
 #include "serial.h"
 
 /* ------------------------------------------------------------------ */
-/*  Bitmap (1 bit per 4 KiB page, up to 256 MiB)                       */
+/*  Bitmap (1 bit per 4 KiB page)                                      */
 /* ------------------------------------------------------------------ */
 
-#define MAX_PAGES  (65536)   /* 256 MiB ÷ 4 KiB */
-#define BITMAP_WORDS (MAX_PAGES / 32)
+#define MAX_PAGES          65536      /* bitmap capacity: 256 MiB */
+#define PMM_MANAGED_LIMIT  0x00800000u /* current paging maps low 8 MiB */
+#define PMM_MANAGED_PAGES  (PMM_MANAGED_LIMIT / PAGE_SIZE)
+#define BITMAP_WORDS       (MAX_PAGES / 32)
+#define PAGE_MASK          ((uint64_t)PAGE_SIZE - 1u)
 
 static uint32_t bitmap[BITMAP_WORDS];
-static size_t   total_pages;
+static size_t   managed_pages;
+static size_t   free_pages;
 
 static void bit_set(size_t idx)   { bitmap[idx / 32] |=  (1u << (idx % 32)); }
 static void bit_clr(size_t idx)   { bitmap[idx / 32] &= ~(1u << (idx % 32)); }
@@ -19,19 +23,70 @@ static int  bit_get(size_t idx)   { return (bitmap[idx / 32] >> (idx % 32)) & 1;
 /*  Mark a physical range as used or free                              */
 /* ------------------------------------------------------------------ */
 
-static void mark_range(uintptr_t base, size_t bytes, int used) {
-    size_t page = (size_t)(base / PAGE_SIZE);
-    size_t count = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
-    for (size_t i = 0; i < count && page + i < MAX_PAGES; i++) {
-        if (used) bit_set(page + i); else bit_clr(page + i);
+static uint64_t page_align_down(uint64_t value) {
+    return value & ~PAGE_MASK;
+}
+
+static uint64_t page_align_up(uint64_t value) {
+    if (value > UINT64_MAX - PAGE_MASK)
+        return UINT64_MAX & ~PAGE_MASK;
+    return (value + PAGE_MASK) & ~PAGE_MASK;
+}
+
+static size_t mark_range(uintptr_t base, size_t bytes, int used) {
+    if (bytes == 0)
+        return 0;
+
+    uint64_t start = (uint64_t)base;
+    uint64_t end = start + (uint64_t)bytes;
+    if (end < start)
+        end = UINT64_MAX;
+
+    if (used) {
+        start = page_align_down(start);
+        end = page_align_up(end);
+    } else {
+        start = page_align_up(start);
+        end = page_align_down(end);
     }
+
+    if (end <= start || start >= PMM_MANAGED_LIMIT)
+        return 0;
+    if (end > PMM_MANAGED_LIMIT)
+        end = PMM_MANAGED_LIMIT;
+
+    size_t changed = 0;
+    size_t first_page = (size_t)(start / PAGE_SIZE);
+    size_t last_page = (size_t)(end / PAGE_SIZE);
+    for (size_t page = first_page; page < last_page && page < PMM_MANAGED_PAGES; page++) {
+        int was_used = bit_get(page);
+        if (used) {
+            if (!was_used)
+                changed++;
+            bit_set(page);
+        } else {
+            if (was_used)
+                changed++;
+            bit_clr(page);
+        }
+    }
+    return changed;
+}
+
+static size_t count_free_pages(void) {
+    size_t count = 0;
+    for (size_t i = 0; i < PMM_MANAGED_PAGES; i++) {
+        if (!bit_get(i))
+            count++;
+    }
+    return count;
 }
 
 /* ------------------------------------------------------------------ */
 /*  Initialise                                                         */
 /* ------------------------------------------------------------------ */
 
-extern uint8_t __bss_end;   /* first free byte after kernel BSS */
+extern uint8_t __kernel_start, __bss_end;   /* kernel image reservation */
 
 void pmm_init(void) {
     serial_puts("[pmm] scanning E820 map...\n");
@@ -40,7 +95,8 @@ void pmm_init(void) {
     for (size_t i = 0; i < BITMAP_WORDS; i++) bitmap[i] = ~0u;
 
     uint16_t entries = E820_COUNT;
-    total_pages = 0;
+    managed_pages = 0;
+    free_pages = 0;
 
     serial_puts("[pmm] entries: ");
     serial_puthex(entries);
@@ -51,36 +107,42 @@ void pmm_init(void) {
         if (E820_BUF[i].type == E820_USABLE) {
             uint64_t base  = E820_BUF[i].base;
             uint64_t len   = E820_BUF[i].length;
-            /* Only track memory below 256 MiB */
-            if (base >= MAX_PAGES * PAGE_SIZE) continue;
-            if (base + len > MAX_PAGES * PAGE_SIZE)
-                len = (uint64_t)MAX_PAGES * PAGE_SIZE - base;
-            size_t pages = (size_t)(len / PAGE_SIZE);
-            total_pages += pages;
-            mark_range((uintptr_t)base, (size_t)len, 0);
+            /* Only free memory the current kernel page tables can access. */
+            if (base >= PMM_MANAGED_LIMIT) continue;
+            if (len > (uint64_t)PMM_MANAGED_LIMIT - base)
+                len = (uint64_t)PMM_MANAGED_LIMIT - base;
+            managed_pages += mark_range((uintptr_t)base, (size_t)len, 0);
         }
     }
 
-    /* Reserve kernel area (0x1000 .. __bss_end + bitmap) */
-    uintptr_t kernel_start = 0x1000;
-    uintptr_t kernel_end   = (uintptr_t)&__bss_end + sizeof(bitmap);
+    /* Reserve kernel image, including .bss where the PMM bitmap lives. */
+    uintptr_t kernel_start = (uintptr_t)&__kernel_start;
+    uintptr_t kernel_end   = (uintptr_t)&__bss_end;
     mark_range(kernel_start, kernel_end - kernel_start, 1);
 
-    /* boot.asm enters the kernel on a stack ending at 0x90000. Task 0 keeps
+    /* boot.asm enters the kernel on a stack ending at 0x700000. Task 0 keeps
      * using that stack, so PMM must never hand these pages to user mappings or
      * later kernel stacks. */
-    mark_range(0x00080000, 0x00010000, 1);
+    mark_range(0x006F0000, 0x00010000, 1);
 
-    /* User processes use 0x001C0000..0x00230000 as private virtual memory.
+    /* User processes use 0x001C0000..0x00280000 as private virtual memory.
      * Do not allocate physical kernel objects there, or those virtual
      * addresses will alias user pages after a CR3 switch. */
-    mark_range(0x001C0000, 0x00230000 - 0x001C0000, 1);
+    mark_range(0x001C0000, 0x00280000 - 0x001C0000, 1);
 
     /* Reserve first 4 KiB (IVT / BDA) */
     mark_range(0, 0x1000, 1);
 
-    serial_puts("[pmm] total free pages: ");
-    serial_puthex((uint32_t)total_pages);
+    free_pages = count_free_pages();
+
+    serial_puts("[pmm] managed limit: ");
+    serial_puthex(PMM_MANAGED_LIMIT);
+    serial_puts(" bytes\n");
+    serial_puts("[pmm] managed usable pages: ");
+    serial_puthex((uint32_t)managed_pages);
+    serial_puts("\n");
+    serial_puts("[pmm] allocatable pages: ");
+    serial_puthex((uint32_t)free_pages);
     serial_puts("\n");
 }
 
@@ -89,15 +151,16 @@ void pmm_init(void) {
 /* ------------------------------------------------------------------ */
 
 uintptr_t pmm_alloc_pages(size_t n) {
-    if (n == 0) return 0;
+    if (n == 0 || n > PMM_MANAGED_PAGES || n > free_pages) return 0;
 
-    for (size_t start = 0; start + n <= MAX_PAGES; start++) {
+    for (size_t start = 0; start <= PMM_MANAGED_PAGES - n; start++) {
         int ok = 1;
         for (size_t j = 0; j < n; j++) {
             if (bit_get(start + j)) { ok = 0; break; }
         }
         if (ok) {
             for (size_t j = 0; j < n; j++) bit_set(start + j);
+            free_pages -= n;
             return (uintptr_t)(start * PAGE_SIZE);
         }
     }
@@ -109,7 +172,19 @@ uintptr_t pmm_alloc_pages(size_t n) {
 /* ------------------------------------------------------------------ */
 
 void pmm_free_pages(uintptr_t addr, size_t n) {
-    mark_range(addr, n * PAGE_SIZE, 0);
+    if (n == 0 || n > PMM_MANAGED_PAGES)
+        return;
+    free_pages += mark_range(addr, n * PAGE_SIZE, 0);
+}
+
+void pmm_info(struct pmm_info *out) {
+    if (!out)
+        return;
+    out->page_size = PAGE_SIZE;
+    out->managed_limit = PMM_MANAGED_LIMIT;
+    out->managed_pages = (uint32_t)managed_pages;
+    out->free_pages = (uint32_t)free_pages;
+    out->used_pages = (uint32_t)(managed_pages > free_pages ? managed_pages - free_pages : 0);
 }
 
 /* ------------------------------------------------------------------ */

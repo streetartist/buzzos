@@ -1,0 +1,8 @@
+BuzzOS Notes user GUI
+
+Executable: /fs/apps/notes
+Run: notes
+Data: /fs/apps/notes.txt
+
+This app demonstrates a multiline text editor in user space.
+It draws its own text area, handles keyboard input, and saves to /fs.

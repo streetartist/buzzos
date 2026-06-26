@@ -16,7 +16,7 @@ struct task {
     int      proc_id;
     uint32_t wake_tick;
     int      id;         /* task id */
-    int      state;      /* 0 = ready, 1 = running, 2 = blocked */
+    int      state;
     char     name[16];
     char     cwd[128];
 };
@@ -25,6 +25,7 @@ struct task {
 #define TASK_RUNNING 1
 #define TASK_DEAD    2
 #define TASK_SLEEPING 3
+#define TASK_BLOCKED 4
 #define MAX_TASKS    32
 
 /* Initialise the scheduler. Creates an idle task from the current
@@ -59,10 +60,16 @@ void task_set_fd_owner(int id, int owner);
 int task_kill(int id);
 void task_dump(void (*putc)(char), int show_dead);
 int task_dump_text(char *buf, int size, int show_dead);
+void task_dump_threads(void (*putc)(char), int show_dead);
+int task_dump_threads_text(char *buf, int size, int show_dead);
 
 /* Mark a task as dead (used by sys_exit for spawned threads). */
 void task_exit(void);
 void task_exit_code(int code);
 void task_sleep_until(uint32_t wake_tick);
+void task_prepare_block_current(uint32_t wake_tick);
+void task_block_current(void);
+void task_block_current_until(uint32_t wake_tick);
+int  task_wake(int id);
 
 #endif /* BUZZOS_TASK_H */

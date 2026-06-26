@@ -30,11 +30,11 @@ struct socket_entry {
     uint32_t peer_ip;
     uint16_t peer_port;
     int connected;
+    struct net_tcp_pcb tcp;
 };
 
 static struct socket_entry sockets[MAX_SOCKETS];
 static volatile int socket_locked;
-static int active_tcp_socket = -1;
 
 static uint16_t ntoh16(uint16_t v) {
     return (uint16_t)((v << 8) | (v >> 8));
@@ -85,6 +85,7 @@ int sys_socket(uint32_t domain, uint32_t type, uint32_t protocol, uint32_t d, ui
             sockets[i].peer_ip = 0;
             sockets[i].peer_port = 0;
             sockets[i].connected = 0;
+            net_tcp_pcb_init(&sockets[i].tcp);
             socket_unlock();
             return i;
         }
@@ -102,6 +103,8 @@ int sys_connect(uint32_t sd_arg, uint32_t addr_arg, uint32_t addrlen,
     struct k_sockaddr_in *addr = (struct k_sockaddr_in *)(uintptr_t)addr_arg;
     if (addr->sin_family != AF_INET_K)
         return -1;
+    uint32_t peer_ip = addr->sin_addr;
+    uint16_t peer_port = ntoh16(addr->sin_port);
 
     socket_lock();
     struct socket_entry *s = socket_get((int)sd_arg);
@@ -110,32 +113,41 @@ int sys_connect(uint32_t sd_arg, uint32_t addr_arg, uint32_t addrlen,
         return -1;
     }
     if (s->type == SOCK_DGRAM_K || s->type == SOCK_RAW_K) {
-        s->peer_ip = addr->sin_addr;
-        s->peer_port = ntoh16(addr->sin_port);
+        s->peer_ip = peer_ip;
+        s->peer_port = peer_port;
         s->connected = 1;
         socket_unlock();
         return 0;
     }
-    if (s->type != SOCK_STREAM_K || active_tcp_socket >= 0) {
+    if (s->type != SOCK_STREAM_K || s->connected) {
         socket_unlock();
         return -1;
     }
-    active_tcp_socket = (int)sd_arg;
+    struct net_tcp_pcb *tcp = &s->tcp;
+    net_tcp_pcb_init(tcp);
     socket_unlock();
 
-    int ret = net_tcp_connect(addr->sin_addr, ntoh16(addr->sin_port));
+    int ret = net_tcp_connect_pcb(tcp, peer_ip, peer_port);
     socket_lock();
     s = socket_get((int)sd_arg);
     if (ret < 0) {
-        if (active_tcp_socket == (int)sd_arg)
-            active_tcp_socket = -1;
+        if (s && s->type == SOCK_STREAM_K) {
+            s->connected = 0;
+            net_tcp_pcb_init(&s->tcp);
+        }
         socket_unlock();
         return -1;
     }
-    if (s)
+    if (s && s->type == SOCK_STREAM_K) {
+        s->peer_ip = peer_ip;
+        s->peer_port = peer_port;
         s->connected = 1;
+        socket_unlock();
+        return 0;
+    }
     socket_unlock();
-    return 0;
+    net_tcp_close_pcb(tcp);
+    return -1;
 }
 
 int sys_send(uint32_t sd_arg, uint32_t buf, uint32_t len, uint32_t flags, uint32_t e) {
@@ -152,10 +164,10 @@ int sys_send(uint32_t sd_arg, uint32_t buf, uint32_t len, uint32_t flags, uint32
     uint16_t local_port = s->local_port;
     uint32_t peer_ip = s->peer_ip;
     uint16_t peer_port = s->peer_port;
-    int tcp_ok = active_tcp_socket == (int)sd_arg;
+    struct net_tcp_pcb *tcp = &s->tcp;
     socket_unlock();
     if (type == SOCK_STREAM_K)
-        return tcp_ok ? net_tcp_send((const void *)(uintptr_t)buf, (size_t)len) : -1;
+        return net_tcp_send_pcb(tcp, (const void *)(uintptr_t)buf, (size_t)len);
     if (type == SOCK_DGRAM_K)
         return net_udp_send(peer_ip, local_port, peer_port, (const void *)(uintptr_t)buf, (size_t)len);
     if (type == SOCK_RAW_K)
@@ -176,10 +188,10 @@ int sys_recv(uint32_t sd_arg, uint32_t buf, uint32_t len, uint32_t flags, uint32
     int type = s->type;
     uint16_t local_port = s->local_port;
     uint32_t peer_ip = s->peer_ip;
-    int tcp_ok = active_tcp_socket == (int)sd_arg;
+    struct net_tcp_pcb *tcp = &s->tcp;
     socket_unlock();
     if (type == SOCK_STREAM_K)
-        return tcp_ok ? net_tcp_recv((void *)(uintptr_t)buf, (size_t)len) : -1;
+        return net_tcp_recv_pcb(tcp, (void *)(uintptr_t)buf, (size_t)len);
     if (type == SOCK_DGRAM_K)
         return net_udp_recv(local_port, 0, 0, (void *)(uintptr_t)buf, (size_t)len);
     if (type == SOCK_RAW_K)
@@ -278,14 +290,27 @@ int sys_closesocket(uint32_t sd_arg, uint32_t b, uint32_t c, uint32_t d, uint32_
         socket_unlock();
         return -1;
     }
-    int was_active = active_tcp_socket == (int)sd_arg;
-    s->used = 0;
+    int close_tcp = s->type == SOCK_STREAM_K && (s->tcp.state != 0 || s->tcp.registered);
+    struct net_tcp_pcb *tcp = &s->tcp;
+    s->used = 2;
+    s->owner = -1;
     s->connected = 0;
-    if (was_active)
-        active_tcp_socket = -1;
     socket_unlock();
-    if (was_active)
-        net_tcp_close();
+    if (close_tcp)
+        net_tcp_close_pcb(tcp);
+    net_tcp_pcb_init(tcp);
+    socket_lock();
+    if ((int)sd_arg >= 0 && (int)sd_arg < MAX_SOCKETS &&
+        sockets[sd_arg].used == 2 && &sockets[sd_arg].tcp == tcp) {
+        sockets[sd_arg].used = 0;
+        sockets[sd_arg].domain = 0;
+        sockets[sd_arg].type = 0;
+        sockets[sd_arg].protocol = 0;
+        sockets[sd_arg].local_port = 0;
+        sockets[sd_arg].peer_ip = 0;
+        sockets[sd_arg].peer_port = 0;
+    }
+    socket_unlock();
     return 0;
 }
 

@@ -4,6 +4,10 @@ BuzzOS is a minimal i386 POSIX-like operating system for learning and experiment
 
 Chinese main README: [README.md](README.md)
 
+Project log: [CHANGELOG.md](CHANGELOG.md). Current status and roadmap:
+[docs/project-status.md](docs/project-status.md). Run `make report` to generate
+the local verification report at `build/project-report.md`.
+
 <table>
   <tr>
     <td><img src="/pic/demo1.png" alt="BuzzOS demo 1"></td>
@@ -24,13 +28,14 @@ Chinese main README: [README.md](README.md)
 - 16-bit BIOS boot sector and transition to 32-bit protected mode.
 - GDT, IDT, exception handling, PIC, PIT timer, keyboard input, VGA text output, and serial output.
 - E820 memory detection, bitmap physical memory manager, paging, and user address spaces.
-- ELF32 user-program loader and a user-space `/bin/sh` shell with Ctrl+C, left/right cursor movement, Home/End, Delete, and up/down command history.
+- ELF32 user-program loader and a user-space `/bin/sh` shell with Ctrl+C, left/right cursor movement, Home/End, Delete, up/down command history, multi-stage pipelines, and basic redirection.
 - User-space `nano` editor and small `basm` assembler for editing, assembling, and running simple assembly programs inside BuzzOS.
 - User-space `gui` desktop using framebuffer blits, PS/2 mouse input, and graphics syscalls. It includes Paint, a built-in shell panel, and a `/fs/apps` GUI app launcher.
+- Seeded user GUI apps in `/fs/apps`: `guidemo` with a single-line textbox, `notes` with multiline editing, and `forms` with multiple focused text boxes, cursor editing, live preview, saved state, and `.app` manifest metadata in the App Center.
 - Preemptive scheduling, process/thread model, `spawn`, `join`, `sleep`, `waitpid`, and `kill`.
 - Syscall ABI for files, processes, directories, networking, IPC, and synchronization.
 - VFS with a mount table:
-  - `/`: initrd/ramfs, including `/hello` and `/bin/sh`
+  - `/`: initrd/ramfs, including `/hello`, `/bin/sh`, `/bin/echo`, and `/bin/cat`
   - `/dev`: standalone devfs with `console`, `serial`, and `null`
   - `/fs`: persistent mini ext-like filesystem; user-added GUI apps should live in `/fs/apps`
 - Mini filesystem:
@@ -47,7 +52,8 @@ Chinese main README: [README.md](README.md)
   - DHCP initialization, DNS, TCP client, UDP datagrams, and ICMP echo
   - user-space socket API: `socket`, `connect`, `send`, `recv`, `bind`, `sendto`, `recvfrom`
 - IPC and synchronization:
-  - `pipe(int fds[2])`
+  - `pipe(int fds[2])` with blocking read/write wakeups
+  - shell examples: `echo hello | cat | cat`, `echo saved > /fs/out`, `cat < /fs/out`
   - `futex_wait` / `futex_wake`
 
 ## Build And Run
@@ -76,10 +82,63 @@ Build and run:
 make run
 ```
 
+Run in a visible QEMU window with serial output written to `build/serial-live.log`
+instead of stealing the terminal:
+
+```sh
+make run-local QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
+
+Start directly in the form-input GUI demo:
+
+```sh
+make run-forms QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
+
 Run the existing image without rebuilding:
 
 ```sh
 make run-current
+```
+
+Run the smoke test:
+
+```sh
+make smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
+
+Run the fast host-side project consistency check:
+
+```sh
+make check-project
+```
+
+Check the persistent mini filesystem in the current image:
+
+```sh
+make fs-check
+make fs-ls
+```
+
+Validate only the seeded GUI app manifests and app ELF outputs:
+
+```sh
+make app-registry
+make app-check
+```
+
+Run the GUI smoke test. It boots a copy of the image, drives `forms`, `notes`,
+and `guidemo`, validates nonblank screenshots, and writes PNGs under
+`build/gui-smoke`:
+
+```sh
+make gui-smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
+
+Run all current verification checks:
+
+```sh
+make verify QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
 Rebuild the image and reset the `/fs` filesystem area:
@@ -97,10 +156,10 @@ If `make` reports that `build/buzzos.img` or `build/user/*.o` is in use, QEMU is
 | Area | Purpose |
 | --- | --- |
 | LBA 0 | boot sector |
-| LBA 1..384 | reserved kernel area, up to 192 KiB |
-| LBA 512..1023 | `/fs` mini filesystem area, 256 KiB |
+| LBA 1..767 | reserved kernel area, up to 383.5 KiB |
+| LBA 768..1279 | `/fs` mini filesystem area, 256 KiB |
 
-`tools/mkimage.ps1` preserves the old `/fs` region by default when rebuilding the image. Use `make image-reset-fs` when you want a clean filesystem.
+`tools/mkimage.ps1` preserves the old `/fs` region by default when rebuilding the image, including layout moves when it can find the minifs superblock. Use `make image-reset-fs` when you want a clean filesystem.
 
 ## Shell Commands
 
@@ -118,6 +177,8 @@ ls [path]
 cd [path]
 pwd
 stat <path>
+fsstat
+fdstat
 cat <file>
 mkdir <dir>
 rmdir <dir>
@@ -125,6 +186,10 @@ touch <file>
 nano <file>
 basm <input.asm> [output]
 gui
+apps [list|info <name>|run <name>]
+guidemo
+notes
+forms
 write <file> <text>
 rm <file>
 mv <old> <new>
@@ -141,9 +206,13 @@ Network and IPC test commands:
 
 ```text
 ping <host-or-ip>
-wget <host>
+wget <host> [port]
+tcptwotest <host> <port-a> <port-b>
 dhcp
+elfbadtest
 pipetest
+pipeedgetest
+pipeblocktest
 futextest
 ```
 
@@ -165,13 +234,43 @@ Graphics desktop:
 gui
 ```
 
-It starts in APP MANAGER. Select Paint, Shell, or an external GUI program from `/fs/apps`. Paint draws with the mouse, and the GUI Shell supports `help`, `ls`, `cat`, `echo`, `apps`, and `run <path>`. Put ELF32 GUI programs in `/fs/apps/<name>` and launch them by clicking the app entry or running `run /fs/apps/<name>` from the GUI shell. In an app, `Esc` or `Ctrl+C` returns to the manager; from the manager it returns to the text shell.
+It starts in APP MANAGER. Select Paint, Shell, or an external GUI program from `/fs/apps`. Paint draws with the mouse, and the GUI Shell supports `help`, `ls`, `cat`, `echo`, `apps`, and `run <path>`. Put ELF32 GUI programs in `/fs/apps/<name>` and launch them by clicking the app entry or running `run /fs/apps/<name>` from the GUI shell. The seeded examples are:
+
+- `guidemo`: buttons, color swatches, a focused single-line textbox, mouse input, and persistent state in `/fs/apps/guidemo.cfg`.
+- `notes`: a multiline text editor that saves to `/fs/apps/notes.txt`.
+- `forms`: four single-line text boxes with mouse focus, Tab/Enter focus movement, Left/Right/Home/End/Delete editing, live preview, and persistent state in `/fs/apps/forms.cfg`.
+
+Each user GUI app has source-side metadata files such as
+`src/user/bin/forms.app`, `src/user/bin/forms.readme`, and optional
+`src/user/bin/forms.seed`. `tools/gen_app_registry.py` generates
+`src/kernel/app_registry.h` from those files so the kernel seeds `/fs/apps`
+from a compact data table. The App Center reads the `.app` manifest for its
+detail panel while still launching the ELF executable from disk.
+
+Create a small app scaffold on the host:
+
+```sh
+make new-app APP=todo
+make app-registry
+python tools/check_project.py --list-apps
+```
+
+The text shell can inspect and launch the same app model:
+
+```text
+apps
+apps info forms
+apps run forms
+```
+
+In an app, `Esc` or `Ctrl+C` returns to the manager; from the manager it returns to the text shell.
 
 The current GUI is a user-space full-screen app manager, not a complete window system. The kernel only exposes VGA 13h graphics mode, framebuffer blits, PS/2 mouse state, and graphics syscalls; layout, Paint, the GUI Shell, external app launching, and the mouse cursor are implemented by the `/bin/gui` user program. This keeps the kernel small and gives BuzzOS a clear path toward a real GUI server later.
 
 Filesystem test example:
 
 ```text
+fsstat
 mkdir /fs/a
 write /fs/a/t hello
 cat /fs/a/t
@@ -185,8 +284,8 @@ rmdir /fs/a
 
 BuzzOS is intentionally small but structured to grow. It is not a complete Unix yet:
 
-- The first socket layer still reuses a single global TCP connection state. It supports TCP client sockets, UDP datagrams, and ICMP echo.
-- Futex wait/wake currently uses yield-based waiting. The interface is in place, but it should move to scheduler-backed wait queues.
+- Stream sockets now keep per-socket TCP PCBs with lightweight input demux and small receive buffers. The TCP/IP stack is still a lightweight client implementation, with limited timeout, retransmission, and window behavior.
+- Futex wait/wake is scheduler-backed; `/proc/sync` and `futexblocktest` expose blocked waiter state.
 - The mini filesystem is fixed-size, uses direct blocks plus one indirect block, and has no journal.
 - The GUI is currently a 320x200x256 full-screen user-space manager with Paint, a GUI Shell, mouse input, and `/fs/apps` app launching. It is not a concurrent multi-window desktop yet.
 - Syscall user-pointer validation is range-based, not full page-permission validation.
@@ -194,11 +293,10 @@ BuzzOS is intentionally small but structured to grow. It is not a complete Unix 
 
 ## Recommended Next Steps
 
-- Move futex wait/wake onto scheduler wait queues to avoid spinning.
-- Split TCP state into per-socket PCBs and support concurrent TCP sockets.
-- Add `fork`, `execve`, and shell pipelines using `pipe`.
+- Add stronger TCP socket regression coverage, timeout, retransmission, window, and larger receive-flow behavior.
+- Add `fork`, `execve`, shell quoting/env expansion, and job-control polish.
 - Add fsck-style validation and stronger rename/unlink semantics to minifs.
-- Add a `/proc` pseudo filesystem for task, memory, and network state.
+- Expand `/proc` with deeper socket, fd flag, filesystem health, and scheduler statistics.
 
 ## Code Map
 

@@ -6,11 +6,25 @@
 #include "vfs.h"
 
 enum {
-    MINIFS_LBA_START = 512,
+    MINIFS_LBA_START = 768,
     MINIFS_SECTORS = 512,
 };
 
+struct fs_info {
+    uint32_t magic;
+    uint32_t inode_count;
+    uint32_t used_inodes;
+    uint32_t dir_count;
+    uint32_t file_count;
+    uint32_t block_count;
+    uint32_t used_blocks;
+    uint32_t free_blocks;
+    uint32_t data_lba;
+    uint32_t max_file_size;
+};
+
 int minifs_mount(void);
+int minifs_info(struct fs_info *out);
 int minifs_open(const char *path, uint16_t *ino_out);
 int minifs_create(const char *path);
 int minifs_mkdir(const char *path);

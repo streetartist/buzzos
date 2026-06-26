@@ -252,14 +252,14 @@ pop eip
 
 ### 4.1 内核布局
 
-内核链接脚本是 [linker.ld](../linker.ld)，入口地址从 `0x1000` 开始：
+内核链接脚本是 [linker.ld](../linker.ld)，入口地址从 `0x100000` 开始：
 
 ```ld
 ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x1000;
+    . = 0x100000;
     .text : {
         *(.text.entry)
         *(.text*)
@@ -268,7 +268,7 @@ SECTIONS
 }
 ```
 
-boot sector 会先把内核读到 `0x10000`，进入保护模式后再复制到 `0x1000`，最后跳到 `0x1000`。
+boot sector 会先把内核读到 `0x10000`，进入保护模式后再复制到 `0x100000`，最后跳到 `0x100000`，避开 `0xA0000` VGA/BIOS hole。
 
 ### 4.2 用户态布局
 
@@ -281,13 +281,13 @@ Makefile 生成用户程序链接脚本，把用户程序放到：
 用户地址窗口当前是：
 
 ```text
-0x001C0000 .. 0x00230000
+0x001C0000 .. 0x00280000
 ```
 
 默认用户栈顶：
 
 ```text
-0x22F000
+0x27F000
 ```
 
 用户态入口前还有一个小 trampoline：
@@ -920,16 +920,16 @@ dap_lba:
     dq 1
 ```
 
-当前内核从 LBA 1 开始，最多加载 384 个扇区，也就是 192 KiB：
+当前内核从 LBA 1 开始，最多加载 767 个扇区，也就是 383.5 KiB：
 
 ```asm
-%define KERNEL_SECTORS 384
+%define KERNEL_SECTORS 767
 ```
 
 Makefile 里也有同名概念：
 
 ```makefile
-KERNEL_SECTORS := 384
+KERNEL_SECTORS := 767
 ```
 
 这两个数必须一致。内核变大时要同步修改，否则镜像构建或启动会失败。
@@ -997,20 +997,20 @@ protected_start:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov esp, 0x90000
+    mov esp, 0x700000
 ```
 
 ### 14.1 为什么有 copy stub
 
-BuzzOS 把内核先读到 `0x10000`，保护模式下再复制到 `0x1000`：
+BuzzOS 把内核先读到 `0x10000`，保护模式下再复制到 `0x100000`：
 
 ```asm
 mov esi, 0x10000
-mov edi, 0x1000
+mov edi, 0x100000
 mov ecx, (KERNEL_SECTORS * 512) / 4
 cld
 rep movsd
-mov eax, 0x1000
+mov eax, 0x100000
 jmp eax
 ```
 
@@ -1430,13 +1430,7 @@ EAX=
 
 ```powershell
 llvm-objdump -d build/user/asmhello.elf
-llvm-objdump -d build/obj/<BUILD_ID>/kernel.elf
-```
-
-如果 `BUILD_ID` 不好找，可以先看：
-
-```powershell
-Get-ChildItem build\obj
+llvm-objdump -d build/obj/kernel/kernel.elf
 ```
 
 反汇编能确认：
@@ -1700,13 +1694,13 @@ boot sector 必须：
 | --- | --- |
 | boot sector 加载地址 | `0x7C00` |
 | 内核临时读取地址 | `0x10000` |
-| 内核最终地址 | `0x1000` |
+| 内核最终地址 | `0x100000` |
 | boot 阶段栈 | `0x7C00` |
-| 保护模式早期栈 | `0x90000` |
+| 保护模式早期栈 | `0x700000` |
 | 用户程序链接地址 | `0x200000` |
 | 用户 trampoline | `0x1FF000` |
-| 用户栈顶 | `0x22F000` |
-| 用户地址范围 | `0x001C0000..0x00230000` |
+| 用户栈顶 | `0x27F000` |
+| 用户地址范围 | `0x001C0000..0x00280000` |
 | 内核代码选择子 | `0x08` |
 | 内核数据选择子 | `0x10` |
 | 用户代码选择子 | `0x1B` |

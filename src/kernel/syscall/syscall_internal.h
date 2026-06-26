@@ -8,7 +8,7 @@ typedef int (*syscall_handler_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32
 
 enum {
     USER_PTR_START = 0x001C0000u,
-    USER_PTR_END   = 0x00230000u,
+    USER_PTR_END   = 0x00280000u,
 };
 
 int user_range_ok(uint32_t ptr, uint32_t len);
@@ -28,6 +28,7 @@ int sys_create(uint32_t path, uint32_t b, uint32_t c, uint32_t d, uint32_t e);
 int sys_lseek(uint32_t fd, uint32_t offset, uint32_t whence, uint32_t d, uint32_t e);
 int sys_rmdir(uint32_t path, uint32_t b, uint32_t c, uint32_t d, uint32_t e);
 int sys_rename(uint32_t old_path, uint32_t new_path, uint32_t c, uint32_t d, uint32_t e);
+int sys_fsstat(uint32_t info_arg, uint32_t b, uint32_t c, uint32_t d, uint32_t e);
 
 int sys_exit(uint32_t code, uint32_t b, uint32_t c, uint32_t d, uint32_t e);
 int sys_spawn_proc(uint32_t path_arg, uint32_t flags, uint32_t c, uint32_t d, uint32_t e);
@@ -59,6 +60,7 @@ int sys_netinfo(uint32_t mac_arg, uint32_t ip_arg, uint32_t c, uint32_t d, uint3
 
 int sys_pipe(uint32_t fds_arg, uint32_t b, uint32_t c, uint32_t d, uint32_t e);
 int sys_futex_wait(uint32_t addr_arg, uint32_t expected, uint32_t c, uint32_t d, uint32_t e);
+int sys_futex_wait_timeout(uint32_t addr_arg, uint32_t expected, uint32_t timeout_ms, uint32_t d, uint32_t e);
 int sys_futex_wake(uint32_t addr_arg, uint32_t count, uint32_t c, uint32_t d, uint32_t e);
 int sys_gfx_mode(uint32_t mode, uint32_t b, uint32_t c, uint32_t d, uint32_t e);
 int sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c, uint32_t d, uint32_t e);

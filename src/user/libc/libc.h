@@ -29,6 +29,10 @@
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+#define SPAWN_FLAG_SILENT      1
+#define SPAWN_FLAG_INHERIT_FDS 2
+#define SPAWN_FLAG_INHERIT_STDIO 4
+
 #define AF_INET 2
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
@@ -47,6 +51,19 @@ struct stat {
     uint32_t st_mode;
     uint32_t st_size;
     uint32_t st_type;
+};
+
+struct fs_info {
+    uint32_t magic;
+    uint32_t inode_count;
+    uint32_t used_inodes;
+    uint32_t dir_count;
+    uint32_t file_count;
+    uint32_t block_count;
+    uint32_t used_blocks;
+    uint32_t free_blocks;
+    uint32_t data_lba;
+    uint32_t max_file_size;
 };
 
 struct dirent {
@@ -71,6 +88,7 @@ int  close(int fd);
 int  dup(int fd);
 int  dup2(int oldfd, int newfd);
 int  stat(const char *path, struct stat *st);
+int  fsstat(struct fs_info *info);
 int  getdents(int fd, struct dirent *ents, size_t count);
 int  spawn_process(const char *path, int flags);
 int  spawn_process_args(const char *path, char *const argv[], int argc, int flags);
@@ -92,6 +110,7 @@ char *getcwd(char *buf, size_t size);
 int  waitpid(int pid, int *status, int options);
 int  pipe(int fds[2]);
 int  futex_wait(int *addr, int expected);
+int  futex_wait_timeout(int *addr, int expected, unsigned int timeout_ms);
 int  futex_wake(int *addr, int count);
 int  socket(int domain, int type, int protocol);
 int  bind(int sd, const struct sockaddr_in *addr, size_t addrlen);
