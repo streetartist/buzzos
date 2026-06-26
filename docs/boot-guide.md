@@ -65,37 +65,33 @@ buzzos:/>
 Get-Process | Where-Object { $_.ProcessName -like "qemu*" } | Stop-Process
 ```
 
-## 5. 直接打开 GUI 示例
+## 5. 直接打开桌面
 
-想马上看图形界面或文本输入框示例：
+想马上看图形界面：
 
 ```powershell
 make run-gui QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-guidemo QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-notes QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-forms QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-calc QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-这些目标会先启动 BuzzOS，再自动输入对应命令。`guidemo` 是单行文本框，`notes` 是多行文本编辑，`forms` 是多输入框表单，`calc` 是双输入框计算器。
+这个目标会先启动 BuzzOS，再自动输入 `gui`。桌面会打开 `Applications`、`Terminal` 和 `System` 窗口；`Applications` 里可以启动 TextEdit、Paint 和 Calculator。
 
 ## 6. 引导链速览
 
 BuzzOS 的本地启动链是：
 
 ```text
-QEMU BIOS -> src/boot/boot.asm -> 32-bit kernel -> initrd -> /bin/sh
+QEMU BIOS -> Limine -> multiboot2 kernel -> initrd -> /bin/sh
 ```
 
 磁盘镜像布局：
 
 ```text
-LBA 0         boot sector
-LBA 1..767    kernel area
-LBA 768..1279 /fs minifs
+LBA 0           MBR / Limine BIOS stage
+LBA 2048..67583 FAT16 boot partition
+LBA 67584..71679 /fs minifs
 ```
 
-内核启动后会初始化 GDT/IDT、分页、物理内存、ATA、VFS、`/proc`、`/fs`、网络、调度器，然后启动用户态 shell。
+FAT16 boot 分区里有 `kernel.elf`、`limine.conf` 和 `limine-bios.sys`。内核启动后会初始化 framebuffer、GDT/IDT、分页、物理内存、ATA、VFS、`/proc`、`/fs`、网络、调度器，然后启动用户态 shell。
 
 ## 7. 本地验证命令
 

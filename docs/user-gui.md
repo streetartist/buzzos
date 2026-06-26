@@ -1,160 +1,101 @@
-# BuzzOS User GUI Example
+# BuzzOS User GUI Apps
 
-BuzzOS includes a small user-space GUI sample at `src/user/bin/guidemo.c`.
-The build embeds the sample ELF, and the kernel seeds it into the writable
-filesystem as:
+BuzzOS hosts GUI apps as independent user-space ELF processes. The desktop in
+`/bin/gui` owns the framebuffer, window stacking, focus, resizing, minimize,
+maximize, close controls, scrollbars, and final composition. Apps receive
+events over pipes and return full frames or dirty rectangles.
 
-```text
-/fs/apps/guidemo
-```
-
-The kernel also seeds:
+The build seeds these apps into `/fs/apps`:
 
 ```text
-/fs/apps/guidemo.txt
-/fs/apps/guidemo.app
-/fs/apps/notes
-/fs/apps/notes.txt
-/fs/apps/notes.app
-/fs/apps/notes.readme
-/fs/apps/forms
-/fs/apps/forms.cfg
-/fs/apps/forms.app
-/fs/apps/forms.readme
-/fs/apps/calc
-/fs/apps/calc.cfg
-/fs/apps/calc.app
-/fs/apps/calc.readme
+/fs/apps/textedit
+/fs/apps/textedit.app
+/fs/apps/textedit.readme
+/fs/apps/paint
+/fs/apps/paint.app
+/fs/apps/paint.readme
+/fs/apps/calculator
+/fs/apps/calculator.app
+/fs/apps/calculator.readme
 ```
 
-The GUI app manager filters `/fs/apps` by ELF magic, so text and manifest files
-can live beside executable user apps without appearing as launchable programs.
-Run `gui` and select `GUIDEMO` in App Manager; the detail panel shows the
-manifest metadata, path, size, state file, and README path before launching it.
-The app list and detail panel both support mouse wheel scrolling.
-`NOTES` is a second user GUI app in the same directory. It provides a multiline
-text input area and saves text to `/fs/apps/notes.txt`.
-`FORMS` demonstrates a more application-like form with multiple focused
-single-line text boxes, mouse focus, Tab/Enter focus movement, live preview,
-Left/Right/Home/End/Delete editing, and saved state in `/fs/apps/forms.cfg`.
-`CALC` demonstrates a compact tool-style GUI with two focused text input boxes,
-operation buttons, keyboard editing, result feedback, and saved state in
-`/fs/apps/calc.cfg`.
+Current default apps:
 
-## Unified UI Style
+| App | Purpose |
+| --- | --- |
+| TextEdit | Plain text editor. The editing area resizes with the window, supports Enter, cursor movement, horizontal and vertical scrollbars, and saves to `/fs/textedit.txt`. |
+| Paint | Bitmap drawing tool. The canvas and toolbar resize with the window, with brush, eraser, line, rectangle, fill, and continuous strokes. |
+| Calculator | Expression calculator with decimals, parentheses, and normal arithmetic precedence. |
 
-The seeded user GUI apps share a small style helper in
-`src/user/libc/gui_style.h`. It keeps the apps visually consistent without
-turning the GUI layer into a large framework:
+## Window Behavior
 
-```text
-ui_topbar
-ui_panel
-ui_button
-ui_field
-ui_textbox
-ui_list_row
-ui_scrollbar
-ui_scroll_select_delta
-ui_mouse_wheel_delta
-ui_pointer
-```
-
-New small GUI apps should use these shared helpers for top bars, panels,
-buttons, text boxes, focus/hover borders, selected list rows, scrollbars,
-mouse-wheel list navigation, pointer drawing, and status colors. App-specific
-layout and behavior still live in each app source file.
-
-`make new-app APP=name` generates a small style-based app scaffold that already
-contains a scrollable highlighted list, mouse-wheel handling, a textbox, and
-save/load buttons.
+The desktop supports click-to-focus and raise, title-bar dragging, edge and
+corner resizing, minimize, maximize, close, mouse wheel scrolling, draggable
+scrollbars, and app resize events.
 
 ## Run It
 
-From the host, open the GUI manager or a specific seeded app directly:
+From the host, open the desktop directly:
 
 ```sh
 make run-gui
-make run-guidemo
-make run-notes
-make run-forms
-make run-calc
 ```
 
 From the text shell:
 
 ```text
 apps
-apps info forms
+apps info textedit
+apps info paint
+apps info calculator
 help apps
 help gui
 help edit
-guidemo
-notes
-forms
-calc
 ```
 
-or:
-
-```text
-exec /fs/apps/guidemo
-```
-
-From the GUI:
+From the text shell, start the desktop:
 
 ```text
 gui
 ```
 
-Then select `GUIDEMO` in App Manager and press `RUN`.
-`NOTES`, `FORMS`, and `CALC` appear in the same App Manager list.
-The built-in GUI shell accepts the same compact help topics, for example
-`help apps`, `help gui`, `help files`, `help proc`, and `help edit`.
+Then double-click TextEdit, Paint, or Calculator in the `Applications` window.
+The text-shell `apps` command is for manifest inspection; GUI apps are launched
+through the desktop.
 
 ## Runtime State
 
-`GUIDEMO` is intentionally not just a drawing sample. It includes a focused
-text input box with keyboard editing and a blinking cursor, then reads and
-writes that text through a state file:
+The default apps use `/fs` for persistent state:
 
 ```text
-/fs/apps/guidemo.cfg
-/fs/apps/forms.cfg
-/fs/apps/notes.txt
-/fs/apps/calc.cfg
+/fs/textedit.txt
+/fs/paint.seed
+/fs/calculator.seed
 ```
 
-Click the text box or press `I`, type some text, press Enter to leave the field,
-then click `SAVE`. Exit and open the app again; the sample restores its click
-count, toggle state, selected color, and text from the writable filesystem.
-In `FORMS`, each field is its own text box; press Tab or Enter to move focus,
-use Left/Right/Home/End/Delete for cursor editing inside a field, then use
-`SAVE`, `LOAD`, `CLEAR`, or `SUBMIT`.
-In `CALC`, press Tab to move between the two numeric fields, Enter to compute,
-or click the operation buttons. It uses the same textbox editing pattern in a
-more tool-like workflow.
+TextEdit writes normal text to `/fs/textedit.txt`. Paint and Calculator ship
+seed files so the manifest detail panel can show state paths consistently.
 
 ## App Manifest
 
 Each app can include a simple `key=value` manifest beside its executable:
 
 ```text
-/fs/apps/forms
-/fs/apps/forms.app
+/fs/apps/paint
+/fs/apps/paint.app
 ```
 
 Supported manifest keys:
 
 ```text
-name=FORMS
-kind=user-gui
-version=1.0
-summary=Multi-field form
-exec=/fs/apps/forms
-state=/fs/apps/forms.cfg
-source=src/user/bin/forms.c
-readme=/fs/apps/forms.readme
+name=Paint
+kind=gui
+version=1
+summary=Bitmap paint app
+exec=/fs/apps/paint
+state=/fs/paint.seed
+source=src/user/bin/paint.c
+readme=/fs/apps/paint.readme
 ```
 
 The App Manager currently uses `name`, `kind`, `version`, `summary`, `state`,
@@ -164,9 +105,9 @@ format can grow without breaking older app manifests.
 At build time, app metadata lives beside the app source:
 
 ```text
-src/user/bin/forms.app
-src/user/bin/forms.readme
-src/user/bin/forms.seed
+src/user/bin/paint.app
+src/user/bin/paint.readme
+src/user/bin/paint.seed
 ```
 
 `tools/gen_app_registry.py` turns those sidecar files into
@@ -196,11 +137,11 @@ src/user/bin/todo.app
 src/user/bin/todo.readme
 ```
 
-The generated C app enters graphics mode, draws a focused text input box,
-handles mouse clicks and keyboard editing, and saves its text state to
-`/fs/apps/todo.cfg`. To make it part of the boot image, add the app name to
-`GUI_APP_NAMES` in `Makefile`. Add `src/user/bin/todo.seed` if the app should
-ship with default saved state.
+The generated C app uses the `guiapp` pipe protocol, draws into an app surface,
+handles mouse clicks and keyboard editing, and saves text state under `/fs`.
+To make it part of the boot image, add the app name to `GUI_APP_NAMES` in
+`Makefile`. Add `src/user/bin/todo.seed` if the app should ship with default
+saved state.
 
 Regenerate the kernel app registry:
 

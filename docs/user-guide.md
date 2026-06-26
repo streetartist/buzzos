@@ -73,66 +73,46 @@ rm /fs/out
 gui
 ```
 
-GUI 会进入 APP MANAGER。可用数字键或鼠标选择：
+GUI 会进入多窗口桌面，默认打开：
 
-- `1` Paint
-- `2` GUI Shell
-- `3` Help
-- `4` 或 `Enter` 运行当前选中的 `/fs/apps` 程序
-- `Up/Down` 选择应用，`Left/Right` 滚动详情
+- `Applications`：显示 `/fs/apps` app 列表和 manifest 详情。
+- `Terminal`：桌面内 shell 窗口。
+- `System`：系统状态窗口。
 
-鼠标滚轮在应用列表上滚动选择，在详情面板上滚动详情内容。
+窗口操作：
 
-在 GUI 内，`Esc` 返回上一层；在管理器里再按 `Esc` 或 `Ctrl+C` 回到文本 shell。
+- 点击窗口激活并置顶。
+- 拖动标题栏移动窗口。
+- 拖动边缘或右下角调整窗口大小。
+- 标题栏按钮支持最小化、最大化和关闭。
+- 鼠标滚轮和滚动条都能滚动窗口内容。
 
-GUI Shell 支持：
-
-```text
-help
-about
-health
-limits
-interfaces
-fsinfo
-ls
-cat /proc/fs
-apps
-run /fs/apps/forms
-```
+`Applications` 里双击 app 可以打开 TextEdit、Paint 或 Calculator。文本 shell 里的 `apps` 命令只查看 manifest 信息，不直接启动图形 app。
 
 ## 4. 用户 GUI 示例
 
 BuzzOS 默认把这些用户态 GUI 程序种子到 `/fs/apps`：
 
-- `guidemo`：单行文本框、按钮、色块、鼠标输入和状态保存。
-- `notes`：多行文本编辑器，保存到 `/fs/apps/notes.txt`。
-- `forms`：多个文本框，支持鼠标聚焦、Tab/Enter 切换、光标编辑和实时预览。
-- `calc`：两个输入框、运算按钮、键盘编辑和结果反馈。
+- `textedit`：文本编辑器，保存到 `/fs/textedit.txt`，编辑区随窗口大小变化。
+- `paint`：绘图程序，画布和工具栏随窗口大小变化。
+- `calculator`：表达式计算器。
 
-从文本 shell 启动：
-
-```text
-guidemo
-notes
-forms
-calc
-```
-
-也可以通过 app 模型查看：
+通过 app 模型查看：
 
 ```text
 apps
-apps info forms
-apps run forms
+apps info textedit
+apps info paint
+apps info calculator
 ```
 
-文本框操作：
+TextEdit 文本框操作：
 
 - 鼠标点击输入框聚焦。
-- `Tab` 或 `Enter` 切换输入框。
 - Backspace/Delete 删除字符。
-- Left/Right/Home/End 移动光标。
-- `Esc` 或 `Ctrl+C` 返回管理器。
+- Left/Right/Up/Down/Home/End 移动光标。
+- Enter 插入换行。
+- 拖动水平/垂直滚动条或使用鼠标滚轮滚动。
 
 ## 5. `/proc` 状态文件
 

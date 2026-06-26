@@ -13,38 +13,39 @@ filesystem, and a user-space GUI app manager.
   `/fs/apps`.
 - Pseudo filesystems: `/dev`, persistent `/fs`, and read-only `/proc` status
   files, including process, thread, network, memory, mount, and sync views.
-- Project identity: `/proc/about`, text-shell `about`, GUI-shell `about`, and
-  `make report` expose the same compact project introduction and documentation
-  map.
-- Health interface: `/proc/health`, text-shell `health`, GUI-shell `health`,
-  and `make report` all expose the same compact project health surface.
-- Interface matrix: `/proc/interfaces`, text-shell `interfaces`, GUI-shell
-  `interfaces`, and `make report` document the current stable/experimental
-  entrypoints without adding a heavier registry service.
-- Runtime limits: `/proc/limits`, text-shell `limits`, GUI-shell `limits`, and
-  `make report` expose capacity boundaries for tasks, fds, pipes, mounts,
-  memory, and minifs without adding a configuration service.
-- Filesystem status: `/proc/fs`, text-shell `fsinfo`, GUI-shell `fsinfo`,
+- Project identity: `/proc/about`, text-shell `about`, desktop-terminal
+  `about`, and `make report` expose the same compact project introduction and
+  documentation map.
+- Health interface: `/proc/health`, text-shell `health`, desktop-terminal
+  `health`, and `make report` all expose the same compact project health
+  surface.
+- Interface matrix: `/proc/interfaces`, text-shell `interfaces`,
+  desktop-terminal `interfaces`, and `make report` document the current
+  stable/experimental entrypoints without adding a heavier registry service.
+- Runtime limits: `/proc/limits`, text-shell `limits`, desktop-terminal
+  `limits`, and `make report` expose capacity boundaries for tasks, fds, pipes,
+  mounts, memory, and minifs without adding a configuration service.
+- Filesystem status: `/proc/fs`, text-shell `fsinfo`, desktop-terminal `fsinfo`,
   `fsstat`, smoke coverage, and `make report` expose the live `/fs`/minifs
   counters and host-side check/repair entrypoints.
 - GUI apps: `textedit`, `paint`, and `calculator`.
-- Unified user GUI style: seeded apps share `src/user/libc/gui_style.h` for
-  top bars, panels, buttons, text boxes, pointer drawing, and status colors.
+- User GUI helpers: seeded apps use `src/user/libc/appui.h` for lightweight
+  controls and `src/user/libc/guiapp.h` for the desktop-hosted app protocol.
 - App packaging: optional `.app` manifests provide `name`, `kind`, `version`,
   `summary`, `state`, `source`, and `readme` metadata for the App Manager.
 - App registry: `tools/gen_app_registry.py` generates `src/kernel/app_registry.h`
   from app sidecar metadata so kernel seeding stays data-driven.
 - Host tooling: `make help` / `tools/workflow.py` lists the recommended local
-  workflow, `make run-gui` and `make run-*` demo targets open seeded GUI
-  examples directly, and `make doctor` / `tools/doctor.py` preflights the local
-  Python, Make, PowerShell, NASM, LLVM, QEMU, and workspace paths.
+  workflow, `make run-gui` opens the desktop directly, and `make doctor` /
+  `tools/doctor.py` preflights the local Python, Make, PowerShell, NASM, LLVM,
+  QEMU, and workspace paths.
 - User documentation: `docs/boot-guide.md` covers local startup, QEMU input,
   and boot troubleshooting; `docs/user-guide.md` covers shell, GUI, text input,
   `/fs`, `/proc`, and common diagnostics.
 - Initrd hygiene: user ELF payloads are section-stripped before embedding, and
   `tools/mkinitrd.py` emits compact 32-byte rows to reduce generated diff noise.
-- App management: the text shell also exposes `apps`, `apps info <name>`, and
-  `apps run <name>`.
+- App management: the text shell exposes `apps` and `apps info <name>` for
+  manifest inspection; GUI apps are launched from the desktop.
 - Shell execution: external commands support multi-stage pipelines plus
   `<`, `>`, and `>>` redirection through stdio-only fd inheritance, so temporary
   pipe endpoints do not leak into child processes.
@@ -106,14 +107,10 @@ Run a visible QEMU session without stealing terminal input:
 make run-local QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-Start directly in the GUI manager or a seeded GUI app:
+Start directly in the GUI desktop:
 
 ```sh
 make run-gui QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-guidemo QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-notes QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-forms QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-calc QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
 Run the smoke test:
@@ -212,19 +209,16 @@ make image-reset-fs
   input/output/append redirection, verifies futex timeout, dead-waiter
   cleanup, and blocked waiter behavior through `/proc/threads` and
   `/proc/sync`, and checks process output.
-- `make check-project` validates image layout, bootloader/Makefile sector
-  agreement, user ELF load ranges, stack bounds, initrd hygiene, ELF loader
+- `make check-project` validates image layout, Limine/multiboot2 boot wiring,
+  user ELF load ranges, stack bounds, initrd hygiene, ELF loader
   hardening and bad runtime fixture coverage, kernel/user syscall ABI agreement,
   futex scheduler-backed blocking, TCP PCB ownership/demux buffers and smoke
   coverage, shell stdio-only fd inheritance, multi-stage pipeline/redirection
   support, pipe blocking semantics, initrd blob reachability, procfs/health
-  diagnostic entries, seeded app manifests, and kernel placement outside the
-  VGA/BIOS hole.
+  diagnostic entries, seeded app manifests, and framebuffer/user memory layout.
 - `make app-check` validates seeded `/fs/apps` manifests and their generated
   user ELF files without running QEMU.
-- `make run-gui`, `make run-guidemo`, `make run-notes`, `make run-forms`, and
-  `make run-calc` provide one-command visible QEMU entrypoints for the GUI
-  manager and seeded user GUI examples.
+- `make run-gui` provides a one-command visible QEMU entrypoint for the desktop.
 - `make fs-check` validates the minifs metadata in a raw disk image.
 - `make fs-repair` writes a conservatively repaired minifs image copy and keeps
   the current image unchanged by default.
@@ -238,21 +232,17 @@ make image-reset-fs
   `build/buzzos-test.img`, and runs negative and repair minifs corruption
   fixtures, covering post-boot formatting, app seeding, file creation,
   deletion, checker failure behavior, and safe host-side repair behavior.
-- `make gui-smoke` boots a disposable image copy, drives user GUI examples, and
+- `make gui-smoke` boots a disposable image copy, drives the user GUI, and
   validates generated screenshots under `build/gui-smoke`.
 - `make report` writes a human-readable local status report to
   `build/project-report.md`, including kernel headroom, app inventory, minifs
   usage, screenshots, and logs.
-- Visual QEMU screenshots verify:
-  - `GUIDEMO` single-line textbox input and persistence.
-  - `NOTES` multiline input and persistence.
-  - `FORMS` multiple text boxes, cursor editing, live preview, and persistence.
-  - `CALC` two text boxes, operation buttons, result feedback, and persistence.
+- Visual QEMU screenshots verify the framebuffer desktop, application list, and
+  seeded app windows.
 
 ## Lightweight Boundaries
 
-- The GUI is still a full-screen user-space app manager, not a multi-window
-  desktop.
+- The GUI is a user-space multi-window desktop, not yet a standalone GUI server.
 - The filesystem is intentionally small and fixed-size.
 - The network stack is useful for experiments, but not a mature production TCP/IP
   stack.

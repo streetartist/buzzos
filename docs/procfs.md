@@ -34,8 +34,9 @@ docs README.md,README.en.md,docs/project-status.md
 log CHANGELOG.md
 ```
 
-The text shell exposes the same file through the `about` command. The GUI shell
-does the same, and `make report` renders it as the Project Identity table.
+The text shell exposes the same file through the `about` command. The desktop
+terminal runs the same shell command, and `make report` renders it as the
+Project Identity table.
 
 `/proc/health` is the compact cross-interface health summary. It is the first
 status file to try when you want one screen of runtime state:
@@ -54,9 +55,9 @@ net_ip
 proc_entries
 ```
 
-The text shell exposes the same file through the `health` command. The GUI
-shell does the same, so the status surface is available through `/proc`, the
-CLI, and the user GUI without adding another syscall.
+The text shell exposes the same file through the `health` command. The desktop
+terminal runs the same shell command, so the status surface is available
+through `/proc`, the CLI, and the user GUI without adding another syscall.
 
 `/proc/interfaces` is a compact capability matrix for BuzzOS entrypoints:
 
@@ -76,7 +77,7 @@ sync stable pipe,futex,/proc/sync
 report stable make:report,build/project-report.md
 ```
 
-The text shell exposes it as `interfaces`; the GUI shell exposes the same
+The text shell exposes it as `interfaces`; the desktop terminal runs the same
 command. This keeps the supported surfaces discoverable without a heavier
 service registry.
 
@@ -101,7 +102,7 @@ minifs_blocks
 minifs_max_file_size
 ```
 
-The text shell exposes it as `limits`; the GUI shell exposes the same command.
+The text shell exposes it as `limits`; the desktop terminal runs the same command.
 These are read-only capacity facts, not tunables.
 
 `/proc/fs` exposes the live `/fs` minifs status in one read-only text file:
@@ -110,8 +111,8 @@ These are read-only capacity facts, not tunables.
 mount /fs
 driver minifs
 status ok
-lba_start 768
-sectors 512
+lba_start 67584
+sectors 4096
 magic 1397113421
 inodes_used
 inodes_total
@@ -126,7 +127,7 @@ host_check make fs-check
 host_repair make fs-repair
 ```
 
-The text shell and GUI shell expose it as `fsinfo`. `fsstat` remains the
+The text shell and desktop terminal expose it as `fsinfo`. `fsstat` remains the
 syscall-backed compact counter view; `fsinfo` is the procfs view that also
 points users to host-side check and repair commands.
 

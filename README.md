@@ -27,7 +27,7 @@ English: [README.en.md](README.en.md)
 - 文件系统：VFS + initrd/ramfs + devfs + 持久化 minifs，`/fs` 默认随镜像重建保留。
 - 网络：QEMU NE2000、DHCP、DNS、ICMP、UDP、TCP client 和用户态 socket API。
 - IPC/同步：pipe、阻塞读写唤醒、futex wait/wake。
-- 诊断接口：`/proc/about`、`/proc/health`、`/proc/interfaces`、`/proc/limits`、`/proc/fs`，并暴露到文本 shell、GUI shell 和 `make report`。
+- 诊断接口：`/proc/about`、`/proc/health`、`/proc/interfaces`、`/proc/limits`、`/proc/fs`，并暴露到文本 shell、桌面终端和 `make report`。
 
 ## 快速运行
 
