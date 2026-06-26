@@ -573,6 +573,7 @@ void vfs_init(void) {
     ramfs_init();
     pipefs_init();
     devfs_init();
+    procfs_init();
     minifs_vfs_init();
 }
 
@@ -592,6 +593,90 @@ void vfs_task_reset(int task_id) {
         open_files[task_id][i].stream.pipe_end = 0;
     }
     vfs_unlock();
+}
+
+static int clone_fd_range(int dst_task_id, int src_task_id, int fd_limit) {
+    if (!valid_fd_owner(dst_task_id) || !valid_fd_owner(src_task_id))
+        return -1;
+    if (dst_task_id == src_task_id)
+        return 0;
+    if (fd_limit < 0)
+        return -1;
+    if (fd_limit > MAX_FD)
+        fd_limit = MAX_FD;
+
+    int refs[MAX_FD];
+    for (int i = 0; i < MAX_FD; i++)
+        refs[i] = 0;
+
+    vfs_lock();
+    for (int i = 0; i < MAX_FD; i++)
+        if (fd_used[dst_task_id][i])
+            close_fd_locked(dst_task_id, i);
+    for (int i = 0; i < MAX_FD; i++) {
+        fd_used[dst_task_id][i] = 0;
+        fd_open_file[dst_task_id][i] = -1;
+        open_files[dst_task_id][i].used = 0;
+        open_files[dst_task_id][i].refs = 0;
+        open_files[dst_task_id][i].flags = 0;
+        open_files[dst_task_id][i].vnode.name = 0;
+        open_files[dst_task_id][i].vnode.ops = 0;
+        open_files[dst_task_id][i].vnode.data = 0;
+        open_files[dst_task_id][i].stream.node = 0;
+        open_files[dst_task_id][i].stream.pos = 0;
+        open_files[dst_task_id][i].stream.minifs_ino = 0;
+        open_files[dst_task_id][i].stream.pipe_idx = -1;
+        open_files[dst_task_id][i].stream.pipe_end = 0;
+    }
+
+    for (int fd = 0; fd < fd_limit; fd++) {
+        if (!fd_used[src_task_id][fd])
+            continue;
+        int of_idx = fd_open_file[src_task_id][fd];
+        if (of_idx < 0 || of_idx >= MAX_FD || !open_files[src_task_id][of_idx].used)
+            continue;
+        refs[of_idx]++;
+    }
+
+    for (int i = 0; i < MAX_FD; i++) {
+        if (!refs[i])
+            continue;
+        struct open_file *src = &open_files[src_task_id][i];
+        struct open_file *dst = &open_files[dst_task_id][i];
+        *dst = *src;
+        dst->refs = refs[i];
+        if (src->vnode.data == &src->stream)
+            dst->vnode.data = &dst->stream;
+        if (dst->stream.pipe_idx >= 0 && dst->stream.pipe_idx < MAX_PIPES) {
+            struct pipe_obj *p = &pipes[dst->stream.pipe_idx];
+            if (p->used) {
+                if (dst->stream.pipe_end == PIPE_READ_END)
+                    p->readers++;
+                else if (dst->stream.pipe_end == PIPE_WRITE_END)
+                    p->writers++;
+            }
+        }
+    }
+
+    for (int fd = 0; fd < fd_limit; fd++) {
+        if (!fd_used[src_task_id][fd])
+            continue;
+        int of_idx = fd_open_file[src_task_id][fd];
+        if (of_idx < 0 || of_idx >= MAX_FD || !open_files[dst_task_id][of_idx].used)
+            continue;
+        fd_used[dst_task_id][fd] = 1;
+        fd_open_file[dst_task_id][fd] = of_idx;
+    }
+    vfs_unlock();
+    return 0;
+}
+
+int vfs_clone_fd_table(int dst_task_id, int src_task_id) {
+    return clone_fd_range(dst_task_id, src_task_id, MAX_FD);
+}
+
+int vfs_clone_stdio(int dst_task_id, int src_task_id) {
+    return clone_fd_range(dst_task_id, src_task_id, 3);
 }
 
 int vfs_setup_stdio(int task_id, int console_silent) {

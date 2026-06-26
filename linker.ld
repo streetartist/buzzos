@@ -2,7 +2,8 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x1000;
+    . = 0x100000;
+    __kernel_start = .;
 
     .text : {
         *(.text.entry)

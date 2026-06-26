@@ -59,10 +59,9 @@ static uint32_t build_user_stack(int argc, const char *const argv[]) {
     return sp;
 }
 
-int exec_start_args(const uint8_t *elf_data, size_t elf_size, const char *name,
-                    int console_silent, int argc, const char *const argv[]) {
-    (void)elf_size;
-
+int exec_start_args_with_fds(const uint8_t *elf_data, size_t elf_size, const char *name,
+                             int console_silent, int argc, const char *const argv[],
+                             int inherit_fd_owner, int inherit_stdio_only) {
     uint32_t old_cr3 = paging_current_cr3();
     uint32_t proc_cr3 = paging_create_user_space();
     if (!proc_cr3) {
@@ -72,7 +71,7 @@ int exec_start_args(const uint8_t *elf_data, size_t elf_size, const char *name,
 
     __asm__ volatile("cli");
     paging_switch(proc_cr3);
-    uint32_t entry = elf_load(elf_data);
+    uint32_t entry = elf_load(elf_data, elf_size);
     uint32_t stack = build_user_stack(argc, argv);
     paging_switch(old_cr3);
     __asm__ volatile("sti");
@@ -86,6 +85,7 @@ int exec_start_args(const uint8_t *elf_data, size_t elf_size, const char *name,
     __asm__ volatile("cli");
     int id = task_create_ex(user_process_trampoline, name ? name : "user_proc", console_silent);
     if (id < 0) {
+        paging_destroy_user_space(proc_cr3);
         __asm__ volatile("sti");
         return -1;
     }
@@ -96,7 +96,17 @@ int exec_start_args(const uint8_t *elf_data, size_t elf_size, const char *name,
     task_set_cr3(id, proc_cr3);
     task_set_console_silent(id, console_silent);
     task_set_fd_owner(id, id);
-    vfs_setup_stdio(id, console_silent);
+    if (inherit_fd_owner >= 0) {
+        int ok = inherit_stdio_only
+            ? vfs_clone_stdio(id, inherit_fd_owner)
+            : vfs_clone_fd_table(id, inherit_fd_owner);
+        if (ok < 0) {
+            serial_puts("[exec] fd clone failed; falling back to stdio\n");
+            vfs_setup_stdio(id, console_silent);
+        }
+    } else {
+        vfs_setup_stdio(id, console_silent);
+    }
     __asm__ volatile("sti");
 
     serial_puts("[exec] entry=");
@@ -106,6 +116,12 @@ int exec_start_args(const uint8_t *elf_data, size_t elf_size, const char *name,
     serial_puts("\n");
 
     return id;
+}
+
+int exec_start_args(const uint8_t *elf_data, size_t elf_size, const char *name,
+                    int console_silent, int argc, const char *const argv[]) {
+    return exec_start_args_with_fds(elf_data, elf_size, name, console_silent,
+                                    argc, argv, -1, 0);
 }
 
 int exec_start(const uint8_t *elf_data, size_t elf_size, const char *name, int console_silent) {

@@ -269,4 +269,5 @@ static struct netdev ne_dev = {
 void ne2000_init_device(void) {
     netdev_register(&ne_dev);
     ne_dev.init(&ne_dev);
+    netdev_register(&ne_dev);
 }

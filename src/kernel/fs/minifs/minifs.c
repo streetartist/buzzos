@@ -435,6 +435,9 @@ static void format_fs(void) {
 
 int minifs_mount(void) {
     uint8_t sector[512];
+    minifs_locked = 0;
+    minifs_irq_flags = 0;
+    mounted = 0;
     minifs_lock();
     if (ata_init() < 0)
     {
@@ -469,6 +472,40 @@ int minifs_mount(void) {
     }
     mounted = 1;
     serial_puts("[minifs] mounted /fs\n");
+    minifs_unlock();
+    return 0;
+}
+
+int minifs_info(struct fs_info *out) {
+    if (!out)
+        return -1;
+    minifs_lock();
+    if (!mounted) {
+        minifs_unlock();
+        return -1;
+    }
+
+    zero(out, sizeof(*out));
+    out->magic = sb.magic;
+    out->inode_count = sb.inode_count;
+    out->block_count = sb.block_count;
+    out->data_lba = sb.data_lba;
+    out->max_file_size = (uint32_t)MINIFS_MAX_FILE_SIZE;
+
+    for (int i = 0; i < MINIFS_INODES; i++) {
+        if (!inodes[i].used)
+            continue;
+        out->used_inodes++;
+        if (inodes[i].type == MINIFS_DIR)
+            out->dir_count++;
+        else if (inodes[i].type == MINIFS_FILE)
+            out->file_count++;
+    }
+    for (int i = 0; i < MINIFS_BLOCKS; i++) {
+        if (block_used[i])
+            out->used_blocks++;
+    }
+    out->free_blocks = out->block_count - out->used_blocks;
     minifs_unlock();
     return 0;
 }

@@ -14,30 +14,148 @@ static struct netdev *nd;
 static int arp_cache_valid;
 static uint32_t arp_cache_ip;
 static uint8_t arp_cache_mac[6];
+static uint32_t net_gateway_ip = 0x0202000A;
+static uint32_t net_dns_ip = 0x0302000A;
+static uint32_t net_last_dhcp_offer;
+static int net_dhcp_status;
+static uint32_t net_tx_frames;
+static uint32_t net_rx_frames;
+static uint32_t net_arp_tx, net_arp_rx;
+static uint32_t net_ip_tx, net_ip_rx;
+static uint32_t net_icmp_tx, net_icmp_rx;
+static uint32_t net_udp_tx, net_udp_rx;
+static uint32_t net_tcp_tx, net_tcp_rx;
+static uint32_t net_dhcp_tx, net_dhcp_rx;
+static uint32_t net_dns_tx, net_dns_rx;
 
 static void dbg(const char *s) { serial_puts("[net] "); serial_puts(s); }
-
-void net_init(void) {
-    ne2000_init_device();
-    nd = netdev_get();
-    for (int i = 0; i < 6; i++) net_mac[i] = nd->mac[i];
-
-    /* Try DHCP; fall back to static 10.0.2.15 if it fails */
-    net_ip = 0;
-    if (net_dhcp() < 0) {
-        net_ip = 0x0F02000A; /* 10.0.2.15 */
-        dbg("dhcp failed, using static IP\n");
-    }
-    serial_puts("[net] IP=");
-    serial_puthex(net_ip);
-    serial_puts("\n");
-}
+static int net_tcp_dispatch_frame(const void *frame, size_t len);
 
 /* --- helpers --- */
 static uint16_t bswap16(uint16_t v) { return (v << 8) | (v >> 8); }
 static uint32_t bswap32(uint32_t v) {
     return ((uint32_t)bswap16((uint16_t)(v >> 16)))
          | ((uint32_t)bswap16((uint16_t)v) << 16);
+}
+
+static void count_pair(uint32_t *tx, uint32_t *rx, int is_tx) {
+    if (is_tx)
+        (*tx)++;
+    else
+        (*rx)++;
+}
+
+static void count_frame_protocols(const void *data, size_t len, int is_tx) {
+    if (!data || len < sizeof(struct eth_frame))
+        return;
+    const struct eth_frame *eth = (const struct eth_frame *)data;
+    uint16_t etype = bswap16(eth->ethertype);
+    if (etype == 0x0806) {
+        count_pair(&net_arp_tx, &net_arp_rx, is_tx);
+        return;
+    }
+    if (etype != 0x0800)
+        return;
+
+    count_pair(&net_ip_tx, &net_ip_rx, is_tx);
+    if (len < sizeof(struct eth_frame) + sizeof(struct ip_hdr))
+        return;
+    const struct ip_hdr *ip = (const struct ip_hdr *)eth->payload;
+    uint8_t ip_hlen = (uint8_t)((ip->ver_ihl & 0x0F) * 4);
+    if (ip_hlen < sizeof(struct ip_hdr) || len < sizeof(struct eth_frame) + ip_hlen)
+        return;
+
+    if (ip->protocol == 1) {
+        count_pair(&net_icmp_tx, &net_icmp_rx, is_tx);
+        return;
+    }
+    if (ip->protocol == 6) {
+        count_pair(&net_tcp_tx, &net_tcp_rx, is_tx);
+        return;
+    }
+    if (ip->protocol != 17)
+        return;
+
+    count_pair(&net_udp_tx, &net_udp_rx, is_tx);
+    if (len < sizeof(struct eth_frame) + ip_hlen + sizeof(struct udp_hdr))
+        return;
+    const struct udp_hdr *udp = (const struct udp_hdr *)((const uint8_t *)ip + ip_hlen);
+    uint16_t src = bswap16(udp->src_port);
+    uint16_t dst = bswap16(udp->dst_port);
+    if ((src == 67 && dst == 68) || (src == 68 && dst == 67))
+        count_pair(&net_dhcp_tx, &net_dhcp_rx, is_tx);
+    if (src == 53 || dst == 53)
+        count_pair(&net_dns_tx, &net_dns_rx, is_tx);
+}
+
+static int dev_send(const void *data, size_t len) {
+    int ret = nd->send(nd, data, len);
+    if (ret == 0) {
+        net_tx_frames++;
+        count_frame_protocols(data, len, 1);
+    }
+    return ret;
+}
+
+static size_t dev_recv_raw(void *buf, size_t max) {
+    size_t n = nd->recv(nd, buf, max);
+    if (n > 0) {
+        net_rx_frames++;
+        count_frame_protocols(buf, n, 0);
+    }
+    return n;
+}
+
+static size_t dev_recv(void *buf, size_t max) {
+    if (!buf || max == 0)
+        return 0;
+    uint8_t raw[1514];
+    void *rxbuf = buf;
+    size_t rxmax = max;
+    if (max < sizeof(raw)) {
+        rxbuf = raw;
+        rxmax = sizeof(raw);
+    }
+
+    for (int drained = 0; drained < 4; drained++) {
+        size_t n = dev_recv_raw(rxbuf, rxmax);
+        if (n == 0)
+            return 0;
+        if (net_tcp_dispatch_frame(rxbuf, n))
+            continue;
+        if (rxbuf != buf) {
+            size_t copy = n < max ? n : max;
+            memcpy(buf, rxbuf, copy);
+            return copy;
+        }
+        return n;
+    }
+    return 0;
+}
+
+void net_init(void) {
+    ne2000_init_device();
+    nd = netdev_get();
+    if (!nd || (uintptr_t)nd == (uintptr_t)~0u) {
+        serial_puts("[net] no network device, using static IP\n");
+        net_ip = 0x0F02000A; /* 10.0.2.15 */
+        net_dhcp_status = -1;
+        return;
+    }
+    for (int i = 0; i < 6; i++) net_mac[i] = nd->mac[i];
+
+    /* Try DHCP; fall back to static 10.0.2.15 if it fails */
+    net_ip = 0;
+    net_last_dhcp_offer = 0;
+    net_dhcp_status = 0;
+    if (net_dhcp() < 0) {
+        net_ip = 0x0F02000A; /* 10.0.2.15 */
+        net_dhcp_status = -1;
+        dbg("dhcp failed, using static IP\n");
+    }
+    serial_puts("[net] IP=");
+    serial_puthex(net_ip);
+    serial_puts("\n");
 }
 
 static uint16_t ip_checksum(const void *data, size_t len) {
@@ -79,11 +197,11 @@ static int arp_resolve(uint32_t ip, uint8_t *mac_out) {
     memset(arp->tha, 0, 6);
     arp->tpa = ip;
 
-    nd->send(nd, pkt, sizeof(pkt));
+    dev_send(pkt, sizeof(pkt));
     dbg("arp sent, waiting reply\n");
     for (int tries = 0; tries < 50; tries++) {
         uint8_t rbuf[64];
-        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
+        size_t n = dev_recv(rbuf, sizeof(rbuf));
         if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
         if (n >= 42) {
             struct eth_frame *re = (struct eth_frame *)rbuf;
@@ -135,7 +253,7 @@ static int ip_send(uint32_t dst_ip, uint8_t proto, const void *data, size_t len)
     ip->checksum  = ip_checksum(ip, sizeof(*ip));
 
     memcpy(ip + 1, data, len);
-    return nd->send(nd, buf, sizeof(struct eth_frame) + sizeof(*ip) + len);
+    return dev_send(buf, sizeof(struct eth_frame) + sizeof(*ip) + len);
 }
 int net_ping(uint32_t ip) {
     struct icmp_echo echo;
@@ -151,7 +269,7 @@ int net_ping(uint32_t ip) {
     dbg("ping sent, waiting reply\n");
     for (int tries = 0; tries < 50; tries++) {
         uint8_t rbuf[1514];
-        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
+        size_t n = dev_recv(rbuf, sizeof(rbuf));
         if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
         dbg("ping recv loop got packet\n");
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr)) { dbg("too short\n"); continue; }
@@ -208,7 +326,7 @@ int net_icmp_recv_echo(uint32_t src_ip, uint16_t id, uint16_t *seq_out,
                        void *buf, size_t max) {
     for (int tries = 0; tries < 1000; tries++) {
         uint8_t rbuf[1514];
-        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
+        size_t n = dev_recv(rbuf, sizeof(rbuf));
         if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct icmp_echo))
             continue;
@@ -248,11 +366,11 @@ void net_status(void) {
  *  Raw send / recv wrappers
  * ================================================================ */
 int net_send(const void *data, size_t len) {
-    return nd->send(nd, data, len);
+    return dev_send(data, len);
 }
 
 size_t net_recv(void *buf, size_t max) {
-    return nd->recv(nd, buf, max);
+    return dev_recv(buf, max);
 }
 
 /* ================================================================
@@ -304,7 +422,7 @@ int net_udp_recv(uint16_t local_port, uint32_t *src_ip, uint16_t *src_port,
                  void *buf, size_t max) {
     for (int tries = 0; tries < 2000; tries++) {
         uint8_t rbuf[1514];
-        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
+        size_t n = dev_recv(rbuf, sizeof(rbuf));
         if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct udp_hdr))
             continue;
@@ -386,7 +504,7 @@ int net_dns_resolve(const char *hostname, uint32_t *ip_out) {
 
     for (int tries = 0; tries < 200; tries++) {
         uint8_t rbuf[1514];
-        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
+        size_t n = dev_recv(rbuf, sizeof(rbuf));
         if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct udp_hdr))
             continue;
@@ -434,42 +552,246 @@ int net_dns_resolve(const char *hostname, uint32_t *ip_out) {
  *  Minimal TCP client
  * ================================================================ */
 
-static struct {
-    uint32_t dst_ip;
-    uint16_t dst_port;
-    uint16_t src_port;
-    uint32_t seq;
-    uint32_t ack;
-    int      state;
-} tcp;
-
+static struct net_tcp_pcb legacy_tcp;
 static uint16_t tcp_next_port = 40960;
 static uint32_t tcp_next_seq = 0x12345678;
+static int net_tcp_open_pcbs;
+static uint32_t net_tcp_rx_buffered;
+static uint32_t net_tcp_rx_dropped;
+static struct net_tcp_pcb *tcp_pcbs;
 
-int net_tcp_connect(uint32_t ip, uint16_t port) {
-    tcp.dst_ip   = ip;
-    tcp.dst_port = port;
-    tcp.src_port = tcp_next_port++;
+enum {
+    TCP_STATE_CLOSED = 0,
+    TCP_STATE_SYN_SENT = 1,
+    TCP_STATE_ESTABLISHED = 2,
+};
+
+static void net_tcp_unregister_pcb(struct net_tcp_pcb *pcb) {
+    if (!pcb || !pcb->registered)
+        return;
+    struct net_tcp_pcb **link = &tcp_pcbs;
+    while (*link) {
+        if (*link == pcb) {
+            *link = pcb->next;
+            break;
+        }
+        link = &(*link)->next;
+    }
+    pcb->registered = 0;
+    pcb->next = 0;
+}
+
+static void net_tcp_register_pcb(struct net_tcp_pcb *pcb) {
+    if (!pcb || pcb->registered)
+        return;
+    pcb->next = tcp_pcbs;
+    pcb->registered = 1;
+    tcp_pcbs = pcb;
+}
+
+void net_tcp_pcb_init(struct net_tcp_pcb *pcb) {
+    if (!pcb)
+        return;
+    if (pcb->state == TCP_STATE_ESTABLISHED && net_tcp_open_pcbs > 0)
+        net_tcp_open_pcbs--;
+    if (pcb->rx_len > 0) {
+        if (net_tcp_rx_buffered >= pcb->rx_len)
+            net_tcp_rx_buffered -= (uint32_t)pcb->rx_len;
+        else
+            net_tcp_rx_buffered = 0;
+    }
+    net_tcp_unregister_pcb(pcb);
+    memset(pcb, 0, sizeof(*pcb));
+}
+
+static void net_tcp_mark_closed(struct net_tcp_pcb *pcb) {
+    if (!pcb)
+        return;
+    if (pcb->state == TCP_STATE_ESTABLISHED && net_tcp_open_pcbs > 0)
+        net_tcp_open_pcbs--;
+    pcb->state = TCP_STATE_CLOSED;
+    net_tcp_unregister_pcb(pcb);
+}
+
+static int net_tcp_send_ack(struct net_tcp_pcb *pcb) {
+    uint8_t ak[sizeof(struct tcp_hdr)];
+    struct tcp_hdr *ah = (struct tcp_hdr *)ak;
+    if (!pcb)
+        return -1;
+    memset(ah, 0, sizeof(*ah));
+    ah->src_port = bswap16(pcb->src_port);
+    ah->dst_port = bswap16(pcb->dst_port);
+    ah->seq      = bswap32(pcb->seq);
+    ah->ack      = bswap32(pcb->ack);
+    ah->data_off = (uint8_t)(sizeof(*ah) / 4) << 4;
+    ah->flags    = TCP_ACK;
+    ah->window   = bswap16(1460);
+    ah->checksum = trans_checksum(net_ip, pcb->dst_ip, 6, ah, sizeof(*ah));
+    return ip_send(pcb->dst_ip, 6, ah, sizeof(*ah));
+}
+
+static struct net_tcp_pcb *net_tcp_match_pcb(uint32_t src_ip, uint16_t src_port,
+                                             uint16_t dst_port) {
+    struct net_tcp_pcb *pcb = tcp_pcbs;
+    while (pcb) {
+        if (pcb->registered && pcb->src_port == dst_port &&
+            pcb->dst_port == src_port && pcb->dst_ip == src_ip)
+            return pcb;
+        pcb = pcb->next;
+    }
+    return 0;
+}
+
+static void net_tcp_queue_rx(struct net_tcp_pcb *pcb, const uint8_t *payload,
+                             size_t plen) {
+    if (!pcb || !payload || plen == 0)
+        return;
+    size_t space = NET_TCP_RX_CAP - pcb->rx_len;
+    size_t copy = plen < space ? plen : space;
+    if (copy > 0) {
+        memcpy(pcb->rx_buf + pcb->rx_len, payload, copy);
+        pcb->rx_len += copy;
+        net_tcp_rx_buffered += (uint32_t)copy;
+    }
+    if (copy < plen)
+        net_tcp_rx_dropped += (uint32_t)(plen - copy);
+}
+
+static int net_tcp_take_rx(struct net_tcp_pcb *pcb, void *buf, size_t max) {
+    if (!pcb || !buf || max == 0 || pcb->rx_len == 0)
+        return 0;
+    size_t take = pcb->rx_len < max ? pcb->rx_len : max;
+    memcpy(buf, pcb->rx_buf, take);
+    for (size_t i = take; i < pcb->rx_len; i++)
+        pcb->rx_buf[i - take] = pcb->rx_buf[i];
+    pcb->rx_len -= take;
+    if (net_tcp_rx_buffered >= take)
+        net_tcp_rx_buffered -= (uint32_t)take;
+    else
+        net_tcp_rx_buffered = 0;
+    return (int)take;
+}
+
+static int net_tcp_poll_once(void) {
+    uint8_t rbuf[1514];
+    size_t n = dev_recv_raw(rbuf, sizeof(rbuf));
+    if (n == 0)
+        return 0;
+    return net_tcp_dispatch_frame(rbuf, n);
+}
+
+static int net_tcp_dispatch_frame(const void *frame, size_t len) {
+    if (!frame || len < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct tcp_hdr))
+        return 0;
+    const struct eth_frame *eth = (const struct eth_frame *)frame;
+    if (bswap16(eth->ethertype) != 0x0800)
+        return 0;
+    const struct ip_hdr *ip = (const struct ip_hdr *)eth->payload;
+    if (ip->protocol != 6 || (net_ip && ip->dst_ip != net_ip))
+        return 0;
+
+    uint16_t ip_total = bswap16(ip->total_len);
+    uint8_t ip_hlen = (uint8_t)((ip->ver_ihl & 0x0F) * 4);
+    if (ip_hlen < sizeof(struct ip_hdr))
+        return 0;
+    if (ip_total < ip_hlen + sizeof(struct tcp_hdr))
+        return 0;
+    if (len < sizeof(struct eth_frame) + ip_total)
+        return 0;
+
+    const struct tcp_hdr *tcp = (const struct tcp_hdr *)((const uint8_t *)ip + ip_hlen);
+    uint16_t src_port = bswap16(tcp->src_port);
+    uint16_t dst_port = bswap16(tcp->dst_port);
+    struct net_tcp_pcb *pcb = net_tcp_match_pcb(ip->src_ip, src_port, dst_port);
+    if (!pcb)
+        return 0;
+
+    if (tcp->flags & TCP_RST) {
+        pcb->rx_reset = 1;
+        net_tcp_mark_closed(pcb);
+        return 1;
+    }
+
+    if (pcb->state == TCP_STATE_SYN_SENT) {
+        if ((tcp->flags & (TCP_SYN | TCP_ACK)) != (TCP_SYN | TCP_ACK))
+            return 1;
+        pcb->ack = bswap32(tcp->seq) + 1;
+        pcb->seq++;
+        net_tcp_send_ack(pcb);
+        pcb->state = TCP_STATE_ESTABLISHED;
+        net_tcp_open_pcbs++;
+        dbg("tcp: connected\n");
+        return 1;
+    }
+
+    if (pcb->state != TCP_STATE_ESTABLISHED)
+        return 1;
+
+    uint8_t doff = (uint8_t)((tcp->data_off >> 4) * 4);
+    if (doff < sizeof(struct tcp_hdr))
+        return 1;
+    size_t tcp_len = (size_t)ip_total - ip_hlen;
+    if (tcp_len < doff)
+        return 1;
+
+    const uint8_t *payload = ((const uint8_t *)tcp) + doff;
+    size_t plen = tcp_len - doff;
+    uint32_t peer_seq = bswap32(tcp->seq);
+    if (plen > 0)
+        net_tcp_queue_rx(pcb, payload, plen);
+
+    if (plen > 0 || (tcp->flags & TCP_FIN)) {
+        pcb->ack = peer_seq + (uint32_t)plen;
+        if (tcp->flags & TCP_FIN)
+            pcb->ack++;
+        net_tcp_send_ack(pcb);
+    }
+
+    if (plen > 0) {
+        serial_puts("[tcp] queued rx len=");
+        serial_puthex((uint32_t)plen);
+        serial_puts("\n");
+    }
+    if (tcp->flags & TCP_FIN) {
+        pcb->rx_closed = 1;
+        net_tcp_mark_closed(pcb);
+    }
+    return 1;
+}
+
+int net_tcp_connect_pcb(struct net_tcp_pcb *pcb, uint32_t ip, uint16_t port) {
+    if (!pcb)
+        return -1;
+    if (pcb->state != TCP_STATE_CLOSED || pcb->registered)
+        return -1;
+
+    pcb->dst_ip   = ip;
+    pcb->dst_port = port;
+    pcb->src_port = tcp_next_port++;
     if (tcp_next_port < 40960 || tcp_next_port > 49151)
         tcp_next_port = 40960;
-    tcp.seq      = tcp_next_seq;
+    pcb->seq      = tcp_next_seq;
     tcp_next_seq += 0x01010101;
-    tcp.ack      = 0;
-    tcp.state    = 0;
+    pcb->ack      = 0;
+    pcb->rx_closed = 0;
+    pcb->rx_reset = 0;
+    pcb->state    = TCP_STATE_SYN_SENT;
+    net_tcp_register_pcb(pcb);
 
     /* Send SYN */
     {
         uint8_t pkt[sizeof(struct tcp_hdr)];
         struct tcp_hdr *th = (struct tcp_hdr *)pkt;
         memset(th, 0, sizeof(*th));
-        th->src_port = bswap16(tcp.src_port);
-        th->dst_port = bswap16(tcp.dst_port);
-        th->seq      = bswap32(tcp.seq);
+        th->src_port = bswap16(pcb->src_port);
+        th->dst_port = bswap16(pcb->dst_port);
+        th->seq      = bswap32(pcb->seq);
         th->data_off = (uint8_t)(sizeof(*th) / 4) << 4;
         th->flags    = TCP_SYN;
         th->window   = bswap16(1460);
-        th->checksum = trans_checksum(net_ip, tcp.dst_ip, 6, th, sizeof(*th));
-        if (ip_send(tcp.dst_ip, 6, th, sizeof(*th)) < 0) {
+        th->checksum = trans_checksum(net_ip, pcb->dst_ip, 6, th, sizeof(*th));
+        if (ip_send(pcb->dst_ip, 6, th, sizeof(*th)) < 0) {
+            net_tcp_mark_closed(pcb);
             dbg("tcp: syn send failed\n"); return -1;
         }
     }
@@ -477,160 +799,111 @@ int net_tcp_connect(uint32_t ip, uint16_t port) {
 
     /* Wait for SYN-ACK */
     for (int tries = 0; tries < 200; tries++) {
-        uint8_t rbuf[1514];
-        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
-        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
-        if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct tcp_hdr))
-            continue;
-        struct eth_frame *re = (struct eth_frame *)rbuf;
-        if (bswap16(re->ethertype) != 0x0800) continue;
-        struct ip_hdr *rip = (struct ip_hdr *)re->payload;
-        if (rip->protocol != 6) continue;
-        uint8_t ip_hlen = (uint8_t)((rip->ver_ihl & 0x0F) * 4);
-        if (ip_hlen < sizeof(struct ip_hdr)) continue;
-        if (n < sizeof(struct eth_frame) + ip_hlen + sizeof(struct tcp_hdr)) continue;
-        struct tcp_hdr *rth = (struct tcp_hdr *)((uint8_t *)rip + ip_hlen);
-        if (bswap16(rth->src_port) != tcp.dst_port) continue;
-        if (bswap16(rth->dst_port) != tcp.src_port) continue;
-        if (!(rth->flags & TCP_SYN) || !(rth->flags & TCP_ACK)) continue;
-
-        tcp.ack = bswap32(rth->seq) + 1;
-        tcp.seq++;
-
-        /* Send ACK */
-        {
-            uint8_t ak[sizeof(struct tcp_hdr)];
-            struct tcp_hdr *ah = (struct tcp_hdr *)ak;
-            memset(ah, 0, sizeof(*ah));
-            ah->src_port = bswap16(tcp.src_port);
-            ah->dst_port = bswap16(tcp.dst_port);
-            ah->seq      = bswap32(tcp.seq);
-            ah->ack      = bswap32(tcp.ack);
-            ah->data_off = (uint8_t)(sizeof(*ah) / 4) << 4;
-            ah->flags    = TCP_ACK;
-            ah->window   = bswap16(1460);
-            ah->checksum = trans_checksum(net_ip, tcp.dst_ip, 6, ah, sizeof(*ah));
-            ip_send(tcp.dst_ip, 6, ah, sizeof(*ah));
-        }
-        dbg("tcp: connected\n");
-        tcp.state = 2;
-        return 0;
+        net_tcp_poll_once();
+        if (pcb->state == TCP_STATE_ESTABLISHED)
+            return 0;
+        if (pcb->rx_reset)
+            return -1;
+        for (volatile int j = 0; j < 50000; j++) {}
     }
+    net_tcp_mark_closed(pcb);
     dbg("tcp: connect timeout\n");
     return -1;
 }
 
-int net_tcp_send(const void *data, size_t len) {
-    if (tcp.state != 2) return -1;
+int net_tcp_send_pcb(struct net_tcp_pcb *pcb, const void *data, size_t len) {
+    if (!pcb || pcb->state != TCP_STATE_ESTABLISHED) return -1;
+    const uint8_t *p = (const uint8_t *)data;
+    size_t left = len;
+    if (left == 0)
+        return 0;
+    while (left > 0) {
+        size_t chunk = left > 1200 ? 1200 : left;
+        uint8_t pkt[sizeof(struct tcp_hdr) + 1200];
+        struct tcp_hdr *th = (struct tcp_hdr *)pkt;
+        memset(th, 0, sizeof(*th));
+        th->src_port = bswap16(pcb->src_port);
+        th->dst_port = bswap16(pcb->dst_port);
+        th->seq      = bswap32(pcb->seq);
+        th->ack      = bswap32(pcb->ack);
+        th->data_off = (uint8_t)(sizeof(*th) / 4) << 4;
+        th->flags    = TCP_PSH | TCP_ACK;
+        th->window   = bswap16(1460);
+        memcpy(pkt + sizeof(*th), p, chunk);
+        th->checksum = trans_checksum(net_ip, pcb->dst_ip, 6, pkt, sizeof(*th) + chunk);
 
-    uint8_t pkt[sizeof(struct tcp_hdr) + len];
-    struct tcp_hdr *th = (struct tcp_hdr *)pkt;
-    memset(th, 0, sizeof(*th));
-    th->src_port = bswap16(tcp.src_port);
-    th->dst_port = bswap16(tcp.dst_port);
-    th->seq      = bswap32(tcp.seq);
-    th->ack      = bswap32(tcp.ack);
-    th->data_off = (uint8_t)(sizeof(*th) / 4) << 4;
-    th->flags    = TCP_PSH | TCP_ACK;
-    th->window   = bswap16(1460);
-    memcpy(pkt + sizeof(*th), data, len);
-    th->checksum = trans_checksum(net_ip, tcp.dst_ip, 6, pkt, sizeof(pkt));
-
-    int ret = ip_send(tcp.dst_ip, 6, pkt, sizeof(pkt));
-    if (ret == 0) tcp.seq += (uint32_t)len;
-    return ret;
+        if (ip_send(pcb->dst_ip, 6, pkt, sizeof(*th) + chunk) < 0)
+            return -1;
+        pcb->seq += (uint32_t)chunk;
+        p += chunk;
+        left -= chunk;
+    }
+    return 0;
 }
 
-int net_tcp_recv(void *buf, size_t max) {
-    if (tcp.state == 0) return 0;
-    if (tcp.state != 2) return -1;
+int net_tcp_recv_pcb(struct net_tcp_pcb *pcb, void *buf, size_t max) {
+    if (!pcb) return -1;
+    int queued = net_tcp_take_rx(pcb, buf, max);
+    if (queued > 0)
+        return queued;
+    if (pcb->rx_reset) {
+        pcb->rx_reset = 0;
+        return -1;
+    }
+    if (pcb->state == TCP_STATE_CLOSED || pcb->rx_closed) return 0;
+    if (pcb->state != TCP_STATE_ESTABLISHED) return -1;
 
     for (int tries = 0; tries < 5000; tries++) {
-        uint8_t rbuf[1514];
-        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
-        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
-        if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct tcp_hdr))
-            continue;
-        struct eth_frame *re = (struct eth_frame *)rbuf;
-        if (bswap16(re->ethertype) != 0x0800) continue;
-        struct ip_hdr *rip = (struct ip_hdr *)re->payload;
-        if (rip->protocol != 6) continue;
-        uint16_t ip_total = bswap16(rip->total_len);
-        uint8_t ip_hlen = (uint8_t)((rip->ver_ihl & 0x0F) * 4);
-        if (ip_hlen < sizeof(struct ip_hdr)) continue;
-        if (ip_total < ip_hlen + sizeof(struct tcp_hdr)) continue;
-        if (n < sizeof(struct eth_frame) + ip_total) continue;
-
-        struct tcp_hdr *rth = (struct tcp_hdr *)((uint8_t *)rip + ip_hlen);
-        if (bswap16(rth->src_port) != tcp.dst_port) continue;
-        if (bswap16(rth->dst_port) != tcp.src_port) continue;
-
-        if (rth->flags & TCP_RST) { dbg("tcp: rst\n"); tcp.state = 0; return -1; }
-
-        /* Data packet */
-        uint8_t doff  = (rth->data_off >> 4) * 4;
-        if (doff < sizeof(struct tcp_hdr)) continue;
-        const uint8_t *payload = ((const uint8_t *)rth) + doff;
-        size_t tcp_len = (size_t)ip_total - ip_hlen;
-        if (tcp_len < doff) continue;
-        size_t plen = tcp_len - doff;
-        size_t ack_len = plen;
-
-        uint32_t peer_seq = bswap32(rth->seq);
-        if (plen > 0) {
-            if (plen > max) plen = max;
-            memcpy(buf, payload, plen);
-            tcp.ack = peer_seq + (uint32_t)ack_len;
-            if (rth->flags & TCP_FIN)
-                tcp.ack++;
-        } else if (rth->flags & TCP_FIN) {
-            tcp.ack = peer_seq + 1;
-        } else {
-            continue;
+        net_tcp_poll_once();
+        queued = net_tcp_take_rx(pcb, buf, max);
+        if (queued > 0)
+            return queued;
+        if (pcb->rx_reset) {
+            pcb->rx_reset = 0;
+            return -1;
         }
-
-        /* Send ACK */
-        {
-            uint8_t ak[sizeof(struct tcp_hdr)];
-            struct tcp_hdr *ah = (struct tcp_hdr *)ak;
-            memset(ah, 0, sizeof(*ah));
-            ah->src_port = bswap16(tcp.src_port);
-            ah->dst_port = bswap16(tcp.dst_port);
-            ah->seq      = bswap32(tcp.seq);
-            ah->ack      = bswap32(tcp.ack);
-            ah->data_off = (uint8_t)(sizeof(*ah) / 4) << 4;
-            ah->flags    = TCP_ACK;
-            ah->window   = bswap16(1460);
-            ah->checksum = trans_checksum(net_ip, tcp.dst_ip, 6, ah, sizeof(*ah));
-            ip_send(tcp.dst_ip, 6, ah, sizeof(*ah));
-        }
-        serial_puts("[tcp] rx data len=");
-        serial_puthex((uint32_t)plen);
-        serial_puts("\n");
-        if (rth->flags & TCP_FIN)
-            tcp.state = 0;
-        return (int)plen;
+        if (pcb->state == TCP_STATE_CLOSED || pcb->rx_closed)
+            return 0;
+        for (volatile int j = 0; j < 50000; j++) {}
     }
     dbg("tcp: recv timeout\n");
     return -1;
 }
 
-void net_tcp_close(void) {
-    if (tcp.state != 2) return;
-    uint8_t fn[sizeof(struct tcp_hdr)];
-    struct tcp_hdr *fh = (struct tcp_hdr *)fn;
-    memset(fh, 0, sizeof(*fh));
-    fh->src_port = bswap16(tcp.src_port);
-    fh->dst_port = bswap16(tcp.dst_port);
-    fh->seq      = bswap32(tcp.seq);
-    fh->ack      = bswap32(tcp.ack);
-    fh->data_off = (uint8_t)(sizeof(*fh) / 4) << 4;
-    fh->flags    = TCP_FIN | TCP_ACK;
-    fh->window   = bswap16(1460);
-    fh->checksum = trans_checksum(net_ip, tcp.dst_ip, 6, fh, sizeof(*fh));
-    ip_send(tcp.dst_ip, 6, fh, sizeof(*fh));
-    tcp.state = 0;
+void net_tcp_close_pcb(struct net_tcp_pcb *pcb) {
+    if (!pcb || pcb->state == TCP_STATE_CLOSED) return;
+    if (pcb->state == TCP_STATE_ESTABLISHED) {
+        uint8_t fn[sizeof(struct tcp_hdr)];
+        struct tcp_hdr *fh = (struct tcp_hdr *)fn;
+        memset(fh, 0, sizeof(*fh));
+        fh->src_port = bswap16(pcb->src_port);
+        fh->dst_port = bswap16(pcb->dst_port);
+        fh->seq      = bswap32(pcb->seq);
+        fh->ack      = bswap32(pcb->ack);
+        fh->data_off = (uint8_t)(sizeof(*fh) / 4) << 4;
+        fh->flags    = TCP_FIN | TCP_ACK;
+        fh->window   = bswap16(1460);
+        fh->checksum = trans_checksum(net_ip, pcb->dst_ip, 6, fh, sizeof(*fh));
+        ip_send(pcb->dst_ip, 6, fh, sizeof(*fh));
+    }
+    net_tcp_mark_closed(pcb);
     dbg("tcp: closed\n");
+}
+
+int net_tcp_connect(uint32_t ip, uint16_t port) {
+    return net_tcp_connect_pcb(&legacy_tcp, ip, port);
+}
+
+int net_tcp_send(const void *data, size_t len) {
+    return net_tcp_send_pcb(&legacy_tcp, data, len);
+}
+
+int net_tcp_recv(void *buf, size_t max) {
+    return net_tcp_recv_pcb(&legacy_tcp, buf, max);
+}
+
+void net_tcp_close(void) {
+    net_tcp_close_pcb(&legacy_tcp);
 }
 
 /* ================================================================
@@ -762,14 +1035,14 @@ static int dhcp_send(uint8_t msg_type, uint32_t xid, uint32_t req_ip) {
     *opt++ = 55; *opt++ = 3; *opt++ = 1; *opt++ = 3; *opt++ = 6; /* param req */
     *opt++ = 255;                                 /* end */
 
-    return nd->send(nd, frame, sizeof(frame));
+    return dev_send(frame, sizeof(frame));
 }
 
 /* Wait for a DHCP reply of the given type. Returns the offered IP. */
 static uint32_t dhcp_recv(uint8_t expect_type, uint32_t xid) {
     for (int tries = 0; tries < 300; tries++) {
         uint8_t rbuf[1514];
-        size_t n = nd->recv(nd, rbuf, sizeof(rbuf));
+        size_t n = dev_recv(rbuf, sizeof(rbuf));
         if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr)
                + sizeof(struct udp_hdr) + 240)
@@ -808,28 +1081,181 @@ static uint32_t dhcp_recv(uint8_t expect_type, uint32_t xid) {
 int net_dhcp(void) {
     uint32_t xid = 0xBEEF0001;
 
+    net_dhcp_status = 0;
+    net_last_dhcp_offer = 0;
     dbg("dhcp: DISCOVER\n");
     if (dhcp_send(DHCP_DISCOVER, xid, 0) < 0) {
+        net_dhcp_status = -1;
         dbg("dhcp: send failed\n"); return -1;
     }
 
     uint32_t offered = dhcp_recv(DHCP_OFFER, xid);
-    if (!offered) { dbg("dhcp: no OFFER\n"); return -1; }
+    if (!offered) { net_dhcp_status = -1; dbg("dhcp: no OFFER\n"); return -1; }
+    net_last_dhcp_offer = offered;
     serial_puts("[dhcp] offered IP=");
     serial_puthex(offered);
     serial_puts("\n");
 
     dbg("dhcp: REQUEST\n");
     if (dhcp_send(DHCP_REQUEST, xid, offered) < 0) {
+        net_dhcp_status = -1;
         dbg("dhcp: send failed\n"); return -1;
     }
 
     uint32_t acked = dhcp_recv(DHCP_ACK, xid);
-    if (!acked) { dbg("dhcp: no ACK\n"); return -1; }
+    if (!acked) { net_dhcp_status = -1; dbg("dhcp: no ACK\n"); return -1; }
 
     net_ip = acked;
+    net_dhcp_status = 1;
     serial_puts("[dhcp] IP assigned: ");
     serial_puthex(net_ip);
     serial_puts("\n");
     return 0;
+}
+
+static void status_append_char(char *buf, int *pos, int cap, char ch) {
+    if (*pos < cap - 1)
+        buf[*pos] = ch;
+    (*pos)++;
+}
+
+static void status_append_text(char *buf, int *pos, int cap, const char *s) {
+    while (s && *s)
+        status_append_char(buf, pos, cap, *s++);
+}
+
+static void status_append_u32(char *buf, int *pos, int cap, uint32_t value) {
+    char tmp[10];
+    int n = 0;
+    if (value == 0) {
+        status_append_char(buf, pos, cap, '0');
+        return;
+    }
+    while (value && n < (int)sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    while (n > 0)
+        status_append_char(buf, pos, cap, tmp[--n]);
+}
+
+static void status_append_hex8(char *buf, int *pos, int cap, uint8_t value) {
+    static const char hex[] = "0123456789ABCDEF";
+    status_append_char(buf, pos, cap, hex[(value >> 4) & 0x0F]);
+    status_append_char(buf, pos, cap, hex[value & 0x0F]);
+}
+
+static void status_append_ipv4(char *buf, int *pos, int cap, uint32_t ip) {
+    status_append_u32(buf, pos, cap, ip & 0xFFu);
+    status_append_char(buf, pos, cap, '.');
+    status_append_u32(buf, pos, cap, (ip >> 8) & 0xFFu);
+    status_append_char(buf, pos, cap, '.');
+    status_append_u32(buf, pos, cap, (ip >> 16) & 0xFFu);
+    status_append_char(buf, pos, cap, '.');
+    status_append_u32(buf, pos, cap, (ip >> 24) & 0xFFu);
+}
+
+static void status_append_mac(char *buf, int *pos, int cap, const uint8_t mac[6]) {
+    for (int i = 0; i < 6; i++) {
+        if (i)
+            status_append_char(buf, pos, cap, ':');
+        status_append_hex8(buf, pos, cap, mac[i]);
+    }
+}
+
+static void status_append_counter_pair(char *buf, int *pos, int cap,
+                                       const char *name, uint32_t tx, uint32_t rx) {
+    status_append_text(buf, pos, cap, name);
+    status_append_text(buf, pos, cap, " tx ");
+    status_append_u32(buf, pos, cap, tx);
+    status_append_text(buf, pos, cap, " rx ");
+    status_append_u32(buf, pos, cap, rx);
+    status_append_char(buf, pos, cap, '\n');
+}
+
+int net_status_text(char *buf, int size) {
+    int pos = 0;
+    if (!buf || size <= 0)
+        return -1;
+
+    status_append_text(buf, &pos, size, "driver ne2000\n");
+
+    status_append_text(buf, &pos, size, "mac ");
+    status_append_mac(buf, &pos, size, net_mac);
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_text(buf, &pos, size, "ip ");
+    status_append_ipv4(buf, &pos, size, net_ip);
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_text(buf, &pos, size, "gateway ");
+    status_append_ipv4(buf, &pos, size, net_gateway_ip);
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_text(buf, &pos, size, "dns ");
+    status_append_ipv4(buf, &pos, size, net_dns_ip);
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_text(buf, &pos, size, "dhcp ");
+    status_append_text(buf, &pos, size,
+                       net_dhcp_status > 0 ? "assigned" :
+                       (net_dhcp_status < 0 ? "fallback" : "pending"));
+    status_append_char(buf, &pos, size, '\n');
+
+    if (net_last_dhcp_offer) {
+        status_append_text(buf, &pos, size, "dhcp_offer ");
+        status_append_ipv4(buf, &pos, size, net_last_dhcp_offer);
+        status_append_char(buf, &pos, size, '\n');
+    }
+
+    status_append_text(buf, &pos, size, "arp ");
+    if (arp_cache_valid) {
+        status_append_ipv4(buf, &pos, size, arp_cache_ip);
+        status_append_char(buf, &pos, size, ' ');
+        status_append_mac(buf, &pos, size, arp_cache_mac);
+    } else {
+        status_append_text(buf, &pos, size, "empty");
+    }
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_text(buf, &pos, size, "tcp ");
+    status_append_text(buf, &pos, size, net_tcp_open_pcbs > 0 ? "connected" : "closed");
+    status_append_text(buf, &pos, size, " open ");
+    status_append_u32(buf, &pos, size, (uint32_t)net_tcp_open_pcbs);
+    if (legacy_tcp.state == TCP_STATE_ESTABLISHED) {
+        status_append_text(buf, &pos, size, " dst ");
+        status_append_ipv4(buf, &pos, size, legacy_tcp.dst_ip);
+        status_append_char(buf, &pos, size, ':');
+        status_append_u32(buf, &pos, size, legacy_tcp.dst_port);
+    }
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_text(buf, &pos, size, "tcp_rx_buffered ");
+    status_append_u32(buf, &pos, size, net_tcp_rx_buffered);
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_text(buf, &pos, size, "tcp_rx_dropped ");
+    status_append_u32(buf, &pos, size, net_tcp_rx_dropped);
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_text(buf, &pos, size, "tx_frames ");
+    status_append_u32(buf, &pos, size, net_tx_frames);
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_text(buf, &pos, size, "rx_frames ");
+    status_append_u32(buf, &pos, size, net_rx_frames);
+    status_append_char(buf, &pos, size, '\n');
+
+    status_append_counter_pair(buf, &pos, size, "arp_frames", net_arp_tx, net_arp_rx);
+    status_append_counter_pair(buf, &pos, size, "ip_frames", net_ip_tx, net_ip_rx);
+    status_append_counter_pair(buf, &pos, size, "icmp_packets", net_icmp_tx, net_icmp_rx);
+    status_append_counter_pair(buf, &pos, size, "udp_packets", net_udp_tx, net_udp_rx);
+    status_append_counter_pair(buf, &pos, size, "tcp_packets", net_tcp_tx, net_tcp_rx);
+    status_append_counter_pair(buf, &pos, size, "dhcp_packets", net_dhcp_tx, net_dhcp_rx);
+    status_append_counter_pair(buf, &pos, size, "dns_packets", net_dns_tx, net_dns_rx);
+
+    if (pos > size - 1)
+        pos = size - 1;
+    buf[pos] = 0;
+    return pos;
 }

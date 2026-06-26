@@ -66,6 +66,8 @@ static int pick_entry(void) {
 }
 
 void block_cache_init(void) {
+    cache_locked = 0;
+    cache_irq_flags = 0;
     cache_lock();
     for (int i = 0; i < CACHE_BLOCKS; i++)
         cache[i].valid = 0;

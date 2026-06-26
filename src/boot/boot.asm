@@ -1,6 +1,6 @@
-%define KERNEL_FINAL_ADDR 0x1000
+%define KERNEL_FINAL_ADDR 0x100000
 %define KERNEL_HIGH_SEG   0x1000   ; ES segment → physical 0x10000
-%define KERNEL_SECTORS    384      ; up to 192 KiB, loaded at 0x10000
+%define KERNEL_SECTORS    767      ; LBA 1..767, loaded at 0x10000
 %define READ_CHUNK        64
 
 bits 16
@@ -170,7 +170,7 @@ protected_start:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov esp, 0x90000
+    mov esp, 0x700000
 
     ; The rep movsd below copies data OVER the boot sector at 0x7C00 (where
     ; this code lives), so we first relocate a position-independent copy
@@ -186,11 +186,11 @@ protected_start:
 ; Position-independent stub — uses only absolute moves and indirect jump.
 .copy_stub:
     mov esi, 0x10000
-    mov edi, 0x1000
+    mov edi, KERNEL_FINAL_ADDR
     mov ecx, (KERNEL_SECTORS * 512) / 4
     cld
     rep movsd
-    mov eax, 0x1000
+    mov eax, KERNEL_FINAL_ADDR
     jmp eax
 .copy_stub_end:
 

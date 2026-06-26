@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <stdint.h>
+#include "minifs.h"
 #include "syscall_internal.h"
 #include "task.h"
 #include "vfs.h"
@@ -104,4 +105,11 @@ int sys_rename(uint32_t old_path, uint32_t new_path, uint32_t c, uint32_t d, uin
         !user_string_ok((const char *)(uintptr_t)new_path))
         return -1;
     return vfs_rename((const char *)(uintptr_t)old_path, (const char *)(uintptr_t)new_path);
+}
+
+int sys_fsstat(uint32_t info_arg, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (!user_range_ok(info_arg, sizeof(struct fs_info)))
+        return -1;
+    return minifs_info((struct fs_info *)(uintptr_t)info_arg);
 }

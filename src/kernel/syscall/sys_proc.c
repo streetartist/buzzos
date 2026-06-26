@@ -54,7 +54,12 @@ static int spawn_proc_common_locked(const char *path, int flags, int argc, const
         if (path[i] == '/')
             name = path + i + 1;
     int silent = (flags & 1u) ? 1 : 0;
-    int pid = exec_start_args(elf_buf, (size_t)total, name, silent, argc, argv);
+    int inherit_all = (flags & 2u) ? 1 : 0;
+    int inherit_stdio = (flags & 4u) ? 1 : 0;
+    int inherit_owner = (inherit_all || inherit_stdio) ? current_fd_owner() : -1;
+    int pid = exec_start_args_with_fds(elf_buf, (size_t)total, name, silent,
+                                       argc, argv, inherit_owner,
+                                       inherit_stdio && !inherit_all);
     return pid;
 }
 

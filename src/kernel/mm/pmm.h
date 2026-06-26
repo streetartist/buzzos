@@ -17,9 +17,18 @@ struct e820_entry {
 
 enum { PAGE_SIZE = 4096, E820_USABLE = 1 };
 
+struct pmm_info {
+    uint32_t page_size;
+    uint32_t managed_limit;
+    uint32_t managed_pages;
+    uint32_t free_pages;
+    uint32_t used_pages;
+};
+
 void     pmm_init(void);
 uintptr_t pmm_alloc_pages(size_t n);
 void     pmm_free_pages(uintptr_t addr, size_t n);
+void     pmm_info(struct pmm_info *out);
 void     pmm_dump(void);
 
 #endif

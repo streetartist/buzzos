@@ -4,6 +4,42 @@ struct pipe_obj pipes[MAX_PIPES];
 
 static int pipe_open(vnode_t *vn) { (void)vn; return 0; }
 
+static uint32_t current_task_bit(void) {
+    if (!current_task || current_task->id < 0 || current_task->id >= MAX_TASKS)
+        return 0;
+    return 1u << (uint32_t)current_task->id;
+}
+
+static void pipe_wake_mask(uint32_t *mask) {
+    uint32_t waiters = *mask;
+    *mask = 0;
+    for (int i = 1; i < MAX_TASKS; i++) {
+        if (waiters & (1u << (uint32_t)i))
+            task_wake(i);
+    }
+}
+
+static int pipe_wait(struct pipe_obj *p, int end) {
+    uint32_t bit = current_task_bit();
+    if (!p || !bit)
+        return -1;
+    if (end == PIPE_READ_END)
+        p->read_waiters |= bit;
+    else
+        p->write_waiters |= bit;
+
+    task_prepare_block_current(0);
+    vfs_unlock();
+    task_yield();
+    vfs_lock();
+
+    if (end == PIPE_READ_END)
+        p->read_waiters &= ~bit;
+    else
+        p->write_waiters &= ~bit;
+    return 0;
+}
+
 static int pipe_close(vnode_t *vn) {
     struct file_stream *s = (struct file_stream *)vn->data;
     if (!s || s->pipe_idx < 0 || s->pipe_idx >= MAX_PIPES)
@@ -15,8 +51,15 @@ static int pipe_close(vnode_t *vn) {
         p->readers--;
     if (s->pipe_end == PIPE_WRITE_END && p->writers > 0)
         p->writers--;
-    if (p->readers == 0 && p->writers == 0)
+    if (p->readers == 0)
+        pipe_wake_mask(&p->write_waiters);
+    if (p->writers == 0)
+        pipe_wake_mask(&p->read_waiters);
+    if (p->readers == 0 && p->writers == 0) {
+        p->read_waiters = 0;
+        p->write_waiters = 0;
         p->used = 0;
+    }
     return 0;
 }
 
@@ -27,6 +70,18 @@ static int pipe_read(vnode_t *vn, void *buf, size_t count) {
     struct pipe_obj *p = &pipes[s->pipe_idx];
     if (!p->used)
         return -1;
+    if (!buf && count > 0)
+        return -1;
+    if (count == 0)
+        return 0;
+    while (p->count == 0 && p->writers > 0) {
+        if (pipe_wait(p, PIPE_READ_END) < 0)
+            return -1;
+        if (!p->used)
+            return 0;
+    }
+    if (p->count == 0)
+        return 0;
     uint8_t *out = (uint8_t *)buf;
     size_t done = 0;
     while (done < count && p->count > 0) {
@@ -34,6 +89,7 @@ static int pipe_read(vnode_t *vn, void *buf, size_t count) {
         p->tail = (p->tail + 1) % PIPE_BUFSZ;
         p->count--;
     }
+    pipe_wake_mask(&p->write_waiters);
     return (int)done;
 }
 
@@ -44,12 +100,27 @@ static int pipe_write(vnode_t *vn, const void *buf, size_t count) {
     struct pipe_obj *p = &pipes[s->pipe_idx];
     if (!p->used || p->readers == 0)
         return -1;
+    if (!buf && count > 0)
+        return -1;
+    if (count == 0)
+        return 0;
     const uint8_t *in = (const uint8_t *)buf;
     size_t done = 0;
-    while (done < count && p->count < PIPE_BUFSZ) {
-        p->data[p->head] = in[done++];
-        p->head = (p->head + 1) % PIPE_BUFSZ;
-        p->count++;
+    while (done < count) {
+        while (p->count == PIPE_BUFSZ && p->readers > 0) {
+            if (pipe_wait(p, PIPE_WRITE_END) < 0)
+                return done ? (int)done : -1;
+            if (!p->used)
+                return done ? (int)done : -1;
+        }
+        if (p->readers == 0)
+            return done ? (int)done : -1;
+        while (done < count && p->count < PIPE_BUFSZ) {
+            p->data[p->head] = in[done++];
+            p->head = (p->head + 1) % PIPE_BUFSZ;
+            p->count++;
+        }
+        pipe_wake_mask(&p->read_waiters);
     }
     return (int)done;
 }
@@ -110,6 +181,8 @@ int vfs_pipe(int fds[2]) {
     p->head = 0;
     p->tail = 0;
     p->count = 0;
+    p->read_waiters = 0;
+    p->write_waiters = 0;
 
     struct open_file *r = &open_files[owner][rof];
     init_open_file(r, O_RDONLY);
@@ -138,6 +211,9 @@ int vfs_pipe(int fds[2]) {
 }
 
 void pipefs_init(void) {
-    for (int i = 0; i < MAX_PIPES; i++)
+    for (int i = 0; i < MAX_PIPES; i++) {
         pipes[i].used = 0;
+        pipes[i].read_waiters = 0;
+        pipes[i].write_waiters = 0;
+    }
 }

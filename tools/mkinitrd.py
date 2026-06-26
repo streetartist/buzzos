@@ -1,6 +1,8 @@
 import re
 import sys
 
+BYTES_PER_LINE = 32
+
 
 def ident(path):
     name = path.strip("/")
@@ -17,8 +19,8 @@ def emit(name, file_path):
     var = ident(name)
     print(f"#define {var.upper()}_SIZE {len(data)}")
     print(f'static const uint8_t {var}_data[{var.upper()}_SIZE] __attribute__((used)) = {{')
-    for i in range(0, len(data), 16):
-        line = ", ".join(f"0x{b:02X}" for b in data[i:i + 16])
+    for i in range(0, len(data), BYTES_PER_LINE):
+        line = ", ".join(f"0x{b:02X}" for b in data[i:i + BYTES_PER_LINE])
         print(f"    {line},")
     print("};")
     print("")

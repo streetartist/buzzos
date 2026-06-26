@@ -23,6 +23,7 @@ struct fs_node {
 static struct fs_node nodes[FS_MAX_NODES];
 static struct fs_node *root_node;
 static struct fs_node *dev_node;
+static struct fs_node *proc_node;
 static struct fs_node *fs_node;
 
 static struct fs_node *alloc_node(enum node_type type, const char *name, int len) {
@@ -343,7 +344,7 @@ static int ramfs_unlink_path(const char *abs, const char *rel) {
     (void)rel;
     vfs_lock();
     struct fs_node *n = resolve_path(abs);
-    if (!n || n == root_node || n == dev_node || n == fs_node ||
+    if (!n || n == root_node || n == dev_node || n == proc_node || n == fs_node ||
         n->readonly || n->type != NODE_FILE) {
         vfs_unlock();
         return -1;
@@ -357,7 +358,7 @@ static int ramfs_rmdir_path(const char *abs, const char *rel) {
     (void)rel;
     vfs_lock();
     struct fs_node *n = resolve_path(abs);
-    if (!n || n == root_node || n == dev_node || n == fs_node || n->readonly ||
+    if (!n || n == root_node || n == dev_node || n == proc_node || n == fs_node || n->readonly ||
         n->type != NODE_DIR || n->first_child) {
         vfs_unlock();
         return -1;
@@ -375,7 +376,7 @@ static int ramfs_rename_path(const char *old_abs, const char *old_rel,
     const char *leaf;
     int leaf_len;
     struct fs_node *new_parent = resolve_parent(new_abs, &leaf, &leaf_len);
-    if (!n || n == root_node || n == dev_node || n == fs_node || n->readonly ||
+    if (!n || n == root_node || n == dev_node || n == proc_node || n == fs_node || n->readonly ||
         !new_parent || new_parent->type != NODE_DIR || leaf_len <= 0 ||
         find_child(new_parent, leaf, leaf_len)) {
         vfs_unlock();
@@ -504,9 +505,12 @@ void ramfs_init(void) {
 
     root_node = alloc_node(NODE_DIR, "", 0);
     dev_node = alloc_node(NODE_DIR, "dev", 3);
+    proc_node = alloc_node(NODE_DIR, "proc", 4);
     fs_node = alloc_node(NODE_DIR, "fs", 2);
     if (root_node && dev_node)
         add_child(root_node, dev_node);
+    if (root_node && proc_node)
+        add_child(root_node, proc_node);
     if (root_node && fs_node)
         add_child(root_node, fs_node);
     vfs_mount("/", &ramfs_ops);

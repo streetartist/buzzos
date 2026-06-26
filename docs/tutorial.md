@@ -70,8 +70,8 @@ BuzzOS 是一个教学型、极简但可扩展的 i386 POSIX-like OS。它的定
 当前边界也要清楚：
 
 - 还没有完整 POSIX：没有 `fork`、`execve`、信号、权限模型、动态链接。
-- TCP socket 仍是早期实现，底层连接状态还不适合大量并发 TCP。
-- futex 接口已经有，但等待实现还比较轻量，后面应接 scheduler wait queue。
+- TCP stream socket 已经有 per-socket PCB、输入 demux 和小接收缓冲，但超时、重传和窗口仍是轻量实现。
+- futex wait/wake 已接入 scheduler 阻塞与唤醒，`/proc/sync` 可观察等待槽。
 - minifs 是固定大小、直接块 + 一级 indirect block、无日志的教学文件系统。
 - syscall 用户指针校验是范围检查，还不是完整的页级权限校验。
 
@@ -213,9 +213,9 @@ build/buzzos.img
 用户程序也在这个流程里构建：
 
 1. 编译 `src/user/libc/crt0.c`、`src/user/libc/libc.c`。
-2. 编译 `src/user/bin/hello.c`、`shell.c`、`nano.c`、`basm.c` 和 `gui.c`。
+2. 编译 `src/user/bin/hello.c`、`shell.c`、`nano.c`、`basm.c`、`gui.c`、`echo.c` 和 `cat.c`。
 3. 链接成 ELF32 用户程序。
-4. `tools/mkinitrd.py` 把 `/hello`、`/bin/sh`、`/bin/nano`、`/bin/basm` 和 `/bin/gui` 写进 `src/kernel/initrd.h`。
+4. `tools/mkinitrd.py` 把 `/hello`、`/bin/sh`、`/bin/nano`、`/bin/basm`、`/bin/gui`、`/bin/echo` 和 `/bin/cat` 写进 `src/kernel/initrd.h`。
 5. 内核构建时把 initrd 作为静态数组编进 kernel。
 
 ### 3.2 常用 make 目标
@@ -301,7 +301,7 @@ help
 当前 shell 支持：
 
 ```text
-ls cd pwd stat cat mkdir rmdir touch write rm mv nano basm gui ping wget dhcp pipetest futextest exec wait kill ps echo sleep reboot help
+ls cd pwd stat fsstat fdstat cat mkdir rmdir touch write rm mv nano basm gui ping wget tcptwotest dhcp elfbadtest pipetest futextest exec wait kill ps echo sleep reboot help
 ```
 
 先做最小验证：
@@ -364,21 +364,21 @@ pwd
 | 区域 | 用途 |
 | --- | --- |
 | LBA 0 | boot sector |
-| LBA 1..384 | kernel 预留区，最多 192 KiB |
-| LBA 512..1023 | `/fs` minifs 区域，256 KiB |
+| LBA 1..767 | kernel 预留区，最多 383.5 KiB |
+| LBA 768..1279 | `/fs` minifs 区域，256 KiB |
 
 这些数字来自 [Makefile](../Makefile)：
 
 ```makefile
-KERNEL_SECTORS := 384
-FS_START_SECTOR := 512
+KERNEL_SECTORS := 767
+FS_START_SECTOR := 768
 FS_SECTORS := 512
 ```
 
 也来自 [src/kernel/fs/minifs/minifs.h](../src/kernel/fs/minifs/minifs.h)：
 
 ```c
-MINIFS_LBA_START = 512,
+MINIFS_LBA_START = 768,
 MINIFS_SECTORS = 512,
 ```
 
@@ -634,17 +634,21 @@ ping example.com
 
 ```text
 wget example.com
+wget 10.0.2.2 8080
+tcptwotest 10.0.2.2 8081 8082
 ```
 
 这个命令在 shell 里叫 `wget`，实现函数名仍是 `cmd_sockget`。它会：
 
-1. `dns_resolve(host, &ip)`
+1. 解析 IPv4 字面量，或 `dns_resolve(host, &ip)`
 2. `socket(AF_INET, SOCK_STREAM, 0)`
-3. `connect(... port 80 ...)`
+3. `connect(... port 80 或指定端口 ...)`
 4. `send()` HTTP/1.0 GET 请求
 5. 循环 `recv()` 并写到 console
 
 建议先用 `example.com`。一些大型站点会重定向、分块、压缩或关闭 HTTP 明文入口，这些都超出当前小网络栈的舒适区。
+在 QEMU user network 下，`10.0.2.2` 指向宿主机；smoke 测试会在宿主机启动一个本地 HTTP 服务，再用 `wget 10.0.2.2 <port>` 验证 TCP socket 路径。
+`tcptwotest` 会打开两个 TCP stream socket，先发两个请求，再先读第二个、后读第一个，用来验证 per-socket PCB demux 和接收缓冲不会互相覆盖。
 
 如果看到部分 HTML 输出后提示 recv 结束或失败，要结合实际日志判断。当前 TCP client 是第一版实现，已经能完成基本 HTTP/1.0 拉取，但还不是成熟 TCP 协议栈。
 
@@ -694,7 +698,7 @@ futex: woke
 5. 子线程调用 `futex_wake(&word, 1)`。
 6. 主线程醒来并 `join()` 子线程。
 
-这已经具备 futex 的接口形状：用户态先看内存值，只有需要等待时才进内核。后续要优化的是内核等待队列，让等待 task 真正阻塞而不是轻量轮转。
+这已经具备 futex 的核心形状：用户态先看内存值，只有需要等待时才进内核。内核会把等待 task 标成 `BLOCKED`，`futex_wake` 再按地址唤醒匹配 waiter；`futexblocktest` 和 `/proc/sync` 可以观察这个状态。
 
 ---
 
@@ -723,15 +727,15 @@ x86 BIOS 启动时会把启动盘第一个扇区读到物理地址：
 5. 加载 GDT。
 6. 设置 `CR0.PE` 进入保护模式。
 7. 切到 32 位代码段。
-8. 把 kernel 复制到最终地址 `0x1000`。
+8. 把 kernel 复制到最终地址 `0x100000`。
 9. 跳到内核入口。
 
 当前常量：
 
 ```asm
-%define KERNEL_FINAL_ADDR 0x1000
+%define KERNEL_FINAL_ADDR 0x100000
 %define KERNEL_HIGH_SEG   0x1000
-%define KERNEL_SECTORS    384
+%define KERNEL_SECTORS    767
 %define READ_CHUNK        64
 ```
 
@@ -739,15 +743,15 @@ x86 BIOS 启动时会把启动盘第一个扇区读到物理地址：
 
 - boot sector 自己在 `0x7C00`。
 - kernel 先读到 `0x10000` 附近，避免覆盖 boot sector。
-- 进入保护模式后再复制到最终地址 `0x1000`。
+- 进入保护模式后再复制到最终地址 `0x100000`，避开 `0xA0000` VGA/BIOS hole。
 - `READ_CHUNK=64` 是为了避开 BIOS 单次读取扇区数限制。
 
-### 11.3 为什么 kernel 预留区是 384 扇区
+### 11.3 为什么 kernel 预留区是 767 扇区
 
 一个扇区 512 字节：
 
 ```text
-384 * 512 = 196608 bytes = 192 KiB
+767 * 512 = 392704 bytes = 383.5 KiB
 ```
 
 Makefile 和 boot.asm 必须一致。如果内核超过 boot.asm 加载的扇区数，`tools/mkimage.ps1` 会直接报错，例如：
@@ -1218,6 +1222,7 @@ ping example.com
 
 ```text
 wget example.com
+wget 10.0.2.2 8080
 ```
 
 ---
@@ -1548,7 +1553,7 @@ Kernel is ... bytes, but boot.asm loads only ... bytes.
 
 原因：bootloader 读取的 kernel 扇区数小于实际 kernel 大小。
 
-当前应该是 384 扇区，也就是 192 KiB。要检查：
+当前应该是 767 扇区，也就是 383.5 KiB。要检查：
 
 - [Makefile](../Makefile) 的 `KERNEL_SECTORS`。
 - [src/boot/boot.asm](../src/boot/boot.asm) 的 `KERNEL_SECTORS`。
@@ -1635,6 +1640,7 @@ make image-reset-fs
 
 ```text
 wget example.com
+wget 10.0.2.2 8080
 ```
 
 再看日志：
@@ -1706,27 +1712,27 @@ PS/2 mouse -> IRQ12 -> mouse_handler -> mouse_state -> SYS_MOUSE_GET -> /bin/gui
 
 下面是比较合理的路线，按优先级排列。
 
-### 20.1 把 futex 接入真正阻塞队列
+### 20.1 继续加固 futex/同步语义
 
-当前 futex 已经能表达 wait/wake，但等待实现还可以更像 Linux：
+当前 futex 已经接入 scheduler 阻塞队列，后续可以继续补更接近 POSIX/Linux 的边界：
 
-- wait 时把 task 挂到 futex wait queue。
-- wake 时移动到 ready queue。
-- timeout 可选。
-- 避免等待时反复 yield。
+- 更明确的错误码和中断/取消语义。
+- 多 waiter 唤醒顺序和公平性。
+- 更细的等待原因诊断。
+- 更多 kill/timeout/wake 交错回归测试。
 
 相关文件：
 
 - [src/kernel/syscall/syscall.c](../src/kernel/syscall/syscall.c)
 - [src/kernel/sched/task.c](../src/kernel/sched/task.c)
 
-### 20.2 完善 per-socket TCP PCB
+### 20.2 完善 TCP 多连接能力
 
-当前 TCP client 还比较集中。要支持多个并发 TCP 连接，需要：
+当前 TCP client 已经把连接状态拆到每个 socket 的 PCB，并具备轻量输入 demux 和 per-PCB 接收缓冲。要更可靠地支持多个并发 TCP 连接，还需要：
 
-- 每个 socket 一个 PCB。
 - 独立 seq/ack/window/retransmit 状态。
-- recv buffer。
+- 更完整的乱序/重复包处理。
+- 更大的 recv buffer 和流控。
 - close state。
 - 超时和重传。
 
@@ -1758,11 +1764,15 @@ PS/2 mouse -> IRQ12 -> mouse_handler -> mouse_state -> SYS_MOUSE_GET -> /bin/gui
 有了 `pipe()`、`dup()`、`dup2()` 后，就可以做：
 
 ```text
-cat /fs/a | grep x
-echo hi > /fs/out
+echo hello | cat
+/bin/echo hello | /bin/cat
+echo hello | cat | cat
+echo saved > /fs/out
+echo again >> /fs/out
+cat < /fs/out
 ```
 
-需要先让 shell 有简单 parser，再用 pipe fd 连接两个子进程。
+当前 shell 支持多段 `|` 连接外部程序，并支持 `<`、`>`、`>>` 基础重定向。内部通过 `pipe()`、`dup2()` 和 `SPAWN_FLAG_INHERIT_STDIO` 只把整理好的 fd 0/1/2 交给子进程，避免临时 pipe 端泄漏。pipe 读空/写满时已经会阻塞并由对端唤醒；下一步可以继续补 shell 引号、转义、环境变量展开和更完整的 job control。
 
 ### 20.5 minifs fsck 和更完整语义
 
@@ -1780,8 +1790,12 @@ minifs 可以继续补：
 
 ```text
 /proc/tasks
+/proc/threads
 /proc/meminfo
+/proc/fds
 /proc/net
+/proc/sync
+/proc/mounts
 ```
 
 这样 shell 不需要专门 syscall 也能读取系统状态，更接近 Unix 风格。
