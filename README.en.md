@@ -1,14 +1,10 @@
 # BuzzOS
 
-BuzzOS is a minimal i386 POSIX-like operating system for learning and experimentation. It is no longer just a boot skeleton: the current tree has a user-space shell, multitasking, syscalls, a VFS, a tiny persistent filesystem, basic TCP/UDP/ICMP sockets, pipes, and futex-style synchronization.
+BuzzOS is an i386 POSIX-like operating system designed for learning and experimentation. It has evolved into a complete small system that boots to a user-mode shell, runs multiple tasks, mounts persistent file systems, connects to networks, and displays a desktop via the Limine framebuffer.
 
-Chinese main README: [README.md](README.md)
+Chinese version: [README.zh.md](README.zh.md)
 
-Project log: [CHANGELOG.md](CHANGELOG.md). Local boot guide:
-[docs/boot-guide.md](docs/boot-guide.md). User guide:
-[docs/user-guide.md](docs/user-guide.md). Current status and roadmap:
-[docs/project-status.md](docs/project-status.md). Run `make report` to generate
-the local verification report at `build/project-report.md`.
+Related documentation: [CHANGELOG.md](CHANGELOG.md), [Local Boot Guide](docs/boot-guide.md), [User Guide](docs/user-guide.md), [Project Status](docs/project-status.md), [User GUI App Guide](docs/user-gui.md). Run `make report` to generate a local verification report at `build/project-report.md`.
 
 <table>
   <tr>
@@ -19,200 +15,150 @@ the local verification report at `build/project-report.md`.
     <td><img src="/pic/demo3.png" alt="BuzzOS demo 3"></td>
     <td><img src="/pic/demo4.png" alt="BuzzOS demo 4"></td>
   </tr>
-  <tr>
-    <td><img src="/pic/demo5.png" alt="BuzzOS demo 5"></td>
-    <td><img src="/pic/demo6.png" alt="BuzzOS demo 6"></td>
-  </tr>
 </table>
 
-## Current Features
+## Current Status
 
-- 16-bit BIOS boot sector and transition to 32-bit protected mode.
-- GDT, IDT, exception handling, PIC, PIT timer, keyboard input, VGA text output, and serial output.
-- E820 memory detection, bitmap physical memory manager, paging, and user address spaces.
-- ELF32 user-program loader and a user-space `/bin/sh` shell with Ctrl+C, left/right cursor movement, Home/End, Delete, up/down command history, multi-stage pipelines, and basic redirection.
-- User-space `nano` editor and small `basm` assembler for editing, assembling, and running simple assembly programs inside BuzzOS.
-- User-space `gui` desktop using framebuffer blits, PS/2 mouse input, and graphics syscalls. It includes Paint, a built-in shell panel, and a `/fs/apps` GUI app launcher.
-- Seeded user GUI apps in `/fs/apps`: `guidemo` with a single-line textbox, `notes` with multiline editing, `forms` with multiple focused text boxes, and `calc` with two focused input boxes, saved state, and `.app` manifest metadata in the App Manager.
-- Seeded user GUI apps share `src/user/libc/gui_style.h` for one unified UI style: shared top bars, panels, buttons, text boxes, list highlighting, scrollbars, mouse-wheel state, pointer drawing, and status colors.
-- Preemptive scheduling, process/thread model, `spawn`, `join`, `sleep`, `waitpid`, and `kill`.
-- Syscall ABI for files, processes, directories, networking, IPC, and synchronization.
-- VFS with a mount table:
-  - `/`: initrd/ramfs, including `/hello`, `/bin/sh`, `/bin/echo`, and `/bin/cat`
-  - `/dev`: standalone devfs with `console`, `serial`, and `null`
-  - `/fs`: persistent mini ext-like filesystem; user-added GUI apps should live in `/fs/apps`
-- Mini filesystem:
-  - directories, regular files, `mkdir`, `rmdir`, `unlink`, and `rename`
-  - `stat`, `getdents`, `open(O_CREAT/O_TRUNC/O_APPEND)`, and `lseek`
-  - fixed disk area, preserved by default across image rebuilds
-  - 128 inodes, 382 data blocks, direct blocks plus one indirect block
-  - maximum single-file size is about 132 KiB; the `/fs` area is 256 KiB
-- Block layer:
-  - ATA PIO sector I/O
-  - simple write-through block cache
-- Networking:
-  - NE2000 on QEMU user-mode networking
-  - DHCP initialization, DNS, TCP client, UDP datagrams, and ICMP echo
-  - user-space socket API: `socket`, `connect`, `send`, `recv`, `bind`, `sendto`, `recvfrom`
-- IPC and synchronization:
-  - `pipe(int fds[2])` with blocking read/write wakeups
-  - shell examples: `echo hello | cat | cat`, `echo saved > /fs/out`, `cat < /fs/out`
-  - `futex_wait` / `futex_wake`
-- Multi-interface project identity: `/proc/about`, the text-shell `about`
-  command, the GUI-shell `about` command, and `make report` expose the same
-  compact project introduction and documentation map.
-- Multi-interface health surface: `/proc/health`, the text-shell `health`
-  command, the GUI-shell `health` command, and `make report` share one compact
-  status vocabulary.
-- Multi-interface capability matrix: `/proc/interfaces`, text-shell
-  `interfaces`, GUI-shell `interfaces`, and `make report` expose stable and
-  experimental entrypoints.
-- Lightweight runtime limits: `/proc/limits`, text-shell `limits`, GUI-shell
-  `limits`, and `make report` expose task, fd, pipe, mount, memory, and minifs
-  capacity boundaries without adding a configuration service.
-- Lightweight filesystem status: `/proc/fs`, text-shell `fsinfo`, GUI-shell
-  `fsinfo`, `fsstat`, smoke coverage, and `make report` expose `/fs`/minifs
-  status from the same compact surface.
+- **Boot chain**: Limine BIOS + multiboot2, requesting `1280x800x32` framebuffer by default.
+- **Kernel**: GDT, IDT, exception handling, PIC, PIT, serial port, PS/2 keyboard & mouse, paging, E820/PMM, ELF32 loader.
+- **User mode**: `/bin/sh` shell, `nano`, `basm`, `cat`, `echo`, `gui`.
+- **Desktop**: User-mode multi-window desktop with support for window activation (raise to top), dragging, resizing, minimize, maximize, close, and scrollbars.
+- **GUI apps**: TextEdit, Paint, Calculator as independent user ELF programs, registered via `/fs/apps/*.app` manifests.
+- **File system**: VFS + initrd/ramfs + devfs + persistent minifs, `/fs` preserved by default across image rebuilds.
+- **Network**: QEMU NE2000, DHCP, DNS, ICMP, UDP, TCP client, and user-mode socket API.
+- **IPC/Synchronization**: pipes, blocking read/write wakeup, futex wait/wake.
+- **Diagnostic interfaces**: `/proc/about`, `/proc/health`, `/proc/interfaces`, `/proc/limits`, `/proc/fs`, exposed to text shell, GUI shell, and `make report`.
 
-## Build And Run
+## Quick Start
 
 Required tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `nasm` | Assembles the bootloader and kernel assembly |
-| `clang` | Compiles the freestanding kernel and user programs |
-| `ld.lld` | Links the kernel and ELF user programs |
-| `llvm-objcopy` | Produces the raw kernel binary |
-| `make` | Build entry point |
-| `powershell` | Image packing on Windows |
-| `qemu-system-i386` | Runs BuzzOS |
+| `nasm` | Assembly kernel entry and interrupt stubs |
+| `clang` | Compile freestanding C kernel and user programs |
+| `ld.lld` | Link kernel and ELF user programs |
+| `llvm-objcopy` | Generate auxiliary binary artifacts |
+| `python` | Generate initrd, app registry, disk images |
+| `powershell` | Run scripts on Windows |
+| `qemu-system-i386` | Run BuzzOS |
+| Limine binary package | Install BIOS boot stages |
 
-Show the local workflow commands:
+Default Limine path:
 
 ```sh
-make help
+D:/limine-binary/limine-binary
 ```
 
-For the first local run, see [docs/boot-guide.md](docs/boot-guide.md). After
-BuzzOS boots, shell, GUI, textbox, `/fs`, and `/proc` usage are covered in
-[docs/user-guide.md](docs/user-guide.md).
+This directory must at least contain:
 
-Check the local build and run environment first:
+```text
+limine-bios.sys
+limine-tool-windows-x86/limine.exe
+```
+
+If the path differs, pass `LIMINE_DIR=...` during build.
+
+Check your local environment:
 
 ```sh
 make doctor QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-`make doctor` runs `tools/doctor.py` and checks `python`, `make`, PowerShell,
-NASM, the LLVM toolchain, and the QEMU path.
-
-Build the image:
-
-```sh
-make
-```
-
 Build and run:
 
 ```sh
+make
 make run
 ```
 
-Run in a visible QEMU window with serial output written to `build/serial-live.log`
-instead of stealing the terminal:
+Run with a visible QEMU window and serial logs written to `build/serial-live.log`:
 
 ```sh
 make run-local QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-Start directly in the GUI manager or a seeded user GUI demo:
+Boot directly into the desktop:
 
 ```sh
 make run-gui QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-guidemo QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-notes QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-forms QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-calc QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-Run the existing image without rebuilding:
-
-```sh
-make run-current
-```
-
-Run the smoke test:
-
-```sh
-make smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-```
-
-Run the fast host-side project consistency check:
-
-```sh
-make check-project
-```
-
-Check the persistent mini filesystem in the current image:
-
-```sh
-make fs-check
-make fs-ls
-```
-
-Validate only the seeded GUI app manifests and app ELF outputs:
-
-```sh
-make app-registry
-make app-check
-```
-
-Run the GUI smoke test. It boots a copy of the image, drives `forms`, `notes`,
-and `guidemo`, validates nonblank screenshots, and writes PNGs under
-`build/gui-smoke`:
-
-```sh
-make gui-smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-```
-
-Run all current verification checks:
-
-```sh
-make verify QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-```
-
-Rebuild the image and reset the `/fs` filesystem area:
+Rebuild the image and clear `/fs`:
 
 ```sh
 make image-reset-fs
 ```
 
-If `make` reports that `build/buzzos.img` or `build/user/*.o` is in use, QEMU is usually still running. Close QEMU and build again.
+If `build/buzzos.img` or `build/user/*.o` is locked, QEMU is likely still running. Close QEMU before rebuilding.
 
-## Disk Image Layout
+## Desktop and Apps
 
-`build/buzzos.img` is a raw disk image:
+Type in the text shell:
 
-| Area | Purpose |
-| --- | --- |
-| LBA 0 | boot sector |
-| LBA 1..767 | reserved kernel area, up to 383.5 KiB |
-| LBA 768..1279 | `/fs` mini filesystem area, 256 KiB |
-
-`tools/mkimage.ps1` preserves the old `/fs` region by default when rebuilding the image, including layout moves when it can find the minifs superblock. Use `make image-reset-fs` when you want a clean filesystem. To inspect or conservatively repair `/fs`, run:
-
-```sh
-make fs-check
-make fs-ls
-make fs-repair
+```text
+gui
 ```
 
-`make fs-repair` writes `build/buzzos-repaired.img` by default and does not overwrite the current image.
+The desktop opens by default with:
+
+- `Applications`: Application list and manifest details.
+- `Terminal`: Shell window inside the desktop.
+- `System`: System status panel.
+
+Window features:
+
+- Click to activate and raise to top.
+- Drag title bar to move.
+- Drag edges or corners to resize.
+- Minimize, maximize, close.
+- Mouse wheel and scrollbars.
+
+Default user GUI apps:
+
+| App | Description |
+| --- | --- |
+| TextEdit | Text editor with editing area resizing with window, supports Enter, cursor movement, horizontal/vertical scrollbars, saves to `/fs/textedit.txt` |
+| Paint | Bitmap drawing tool with canvas and toolbar resizing with window, supports pen, eraser, line, rectangle, fill, and continuous strokes |
+| Calculator | Expression calculator supporting parentheses, decimals, and common arithmetic expressions |
+
+View app information in the text shell:
+
+```text
+apps
+apps info textedit
+apps info paint
+apps info calculator
+```
+
+GUI apps are launched from the desktop and are not meant to be run directly from the text shell.
+
+## Writing Your Own GUI App
+
+Recommended path for adding a new app:
+
+```sh
+make new-app APP=myapp
+```
+
+Then:
+
+1. Implement the user-mode app in `src/user/bin/myapp.c`.
+2. Write the manifest in `src/user/bin/myapp.app`.
+3. Add `myapp` to `GUI_APP_NAMES` in the Makefile.
+4. Run:
+
+```sh
+make app-registry
+make app-check
+make image-reset-fs run
+```
+
+The GUI app protocol is defined in [src/user/libc/guiapp.h](src/user/libc/guiapp.h), and basic control drawing utilities are in [src/user/libc/appui.h](src/user/libc/appui.h). The desktop sends init, resize, mouse, key, and close events via pipes, and the app returns either full frames or dirty rectangles.
 
 ## Shell Commands
 
-After boot, BuzzOS enters the user-space shell:
+After boot, you will see:
 
 ```text
 === BuzzOS User Shell ===
@@ -222,10 +168,7 @@ buzzos:/>
 Common commands:
 
 ```text
-ls [path]
-cd [path]
-pwd
-stat <path>
+help
 about
 health
 interfaces
@@ -233,21 +176,21 @@ limits
 fsinfo
 fsstat
 fdstat
+ls [path]
+cd [path]
+pwd
+stat <path>
 cat <file>
 mkdir <dir>
 rmdir <dir>
 touch <file>
-nano <file>
-basm <input.asm> [output]
-gui
-apps [list|info <name>|run <name>]
-guidemo
-notes
-forms
-calc
 write <file> <text>
 rm <file>
 mv <old> <new>
+nano <file>
+basm <input.asm> [output]
+gui
+apps [list|info <name>]
 exec <program> [args...] [&|bg]
 wait [pid]
 kill <pid>
@@ -257,21 +200,25 @@ sleep <seconds>
 reboot
 ```
 
-Network and IPC test commands:
+Network and IPC tests:
 
 ```text
 ping <host-or-ip>
 wget <host> [port]
 tcptwotest <host> <port-a> <port-b>
 dhcp
-elfbadtest
+netstat
 pipetest
 pipeedgetest
 pipeblocktest
 futextest
+futextimeouttest
+futexcanceltest
+futexblocktest
+elfbadtest
 ```
 
-Edit, assemble, and run assembly inside BuzzOS:
+Write and run assembly inside BuzzOS:
 
 ```text
 nano /fs/demo.asm
@@ -281,99 +228,79 @@ exec /fs/demo
 
 In `nano`, `Ctrl+T` inserts a minimal assembly template, `Ctrl+S` saves, and `Ctrl+C` exits.
 
-`basm` is not full NASM. It is a small BuzzOS-focused assembler for learning and experiments. It supports a practical subset such as `bits/global/section/%define/equ/label`, `db/dd`, and `mov/xor/int/ret/nop/push/pop/call/jmp/jcc/add/sub/cmp`, and emits ELF32 files that the BuzzOS loader can execute directly.
+## Image Layout
 
-Graphics desktop:
+`build/buzzos.img` is a raw disk image:
 
-```text
-gui
-```
+| Region | Purpose |
+| --- | --- |
+| LBA 0 | MBR, Limine BIOS stage installed here |
+| LBA 2048..67583 | FAT16 boot partition, contains `kernel.elf`, `limine.conf`, `limine-bios.sys` |
+| LBA 67584..71679 | Raw `/fs` minifs partition, default 4096 sectors / 2 MiB |
 
-It starts in APP MANAGER. Select Paint, Shell, or an external GUI program from `/fs/apps`. The app list and detail panel support mouse wheel scrolling; `Up/Down` selects apps and `Left/Right` scrolls detail text. Paint draws with the mouse, and the GUI Shell supports `help`, `about`, `health`, `limits`, `interfaces`, `fsinfo`, `ls`, `cat`, `echo`, `apps`, and `run <path>`. Put ELF32 GUI programs in `/fs/apps/<name>` and launch them by clicking the app entry or running `run /fs/apps/<name>` from the GUI shell. The seeded examples are:
+`tools/mkbootimg.py` preserves the existing `/fs` region by default. To clear it, run `make image-reset-fs`.
 
-- `guidemo`: buttons, color swatches, a focused single-line textbox, mouse input, and persistent state in `/fs/apps/guidemo.cfg`.
-- `notes`: a multiline text editor that saves to `/fs/apps/notes.txt`.
-- `forms`: four single-line text boxes with mouse focus, Tab/Enter focus movement, Left/Right/Home/End/Delete editing, live preview, and persistent state in `/fs/apps/forms.cfg`.
-- `calc`: two single-line input boxes, operation buttons, keyboard editing, result feedback, and persistent state in `/fs/apps/calc.cfg`.
-
-Each user GUI app has source-side metadata files such as
-`src/user/bin/forms.app`, `src/user/bin/forms.readme`, and optional
-`src/user/bin/forms.seed`. `tools/gen_app_registry.py` generates
-`src/kernel/app_registry.h` from those files so the kernel seeds `/fs/apps`
-from a compact data table. The App Manager reads the `.app` manifest for its
-detail panel while still launching the ELF executable from disk.
-
-Create a small app scaffold on the host:
+Check and repair `/fs`:
 
 ```sh
-make new-app APP=todo
-make app-registry
-python tools/check_project.py --list-apps
+make fs-check
+make fs-ls
+make fs-repair
 ```
 
-The text shell can inspect and launch the same app model:
+`make fs-repair` writes `build/buzzos-repaired.img` by default and does not overwrite the current image.
 
-```text
-apps
-apps info forms
-apps run forms
+## Verification
+
+Quick consistency check:
+
+```sh
+make check-project
 ```
 
-In an app, `Esc` or `Ctrl+C` returns to the manager; from the manager it returns to the text shell.
+Serial smoke test:
 
-The current GUI is a user-space full-screen app manager, not a complete window system. The kernel only exposes VGA 13h graphics mode, framebuffer blits, PS/2 mouse state, and graphics syscalls; layout, Paint, the GUI Shell, external app launching, and the mouse cursor are implemented by the `/bin/gui` user program. This keeps the kernel small and gives BuzzOS a clear path toward a real GUI server later.
+```sh
+make smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
 
-Filesystem test example:
+GUI smoke test:
 
-```text
-fsinfo
-cat /proc/fs
-fsstat
-mkdir /fs/a
-write /fs/a/t hello
-cat /fs/a/t
-stat /fs/a/t
-mv /fs/a/t /fs/a/u
-rm /fs/a/u
-rmdir /fs/a
+```sh
+make gui-smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
+
+Full verification:
+
+```sh
+make verify QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
 ## Design Boundaries
 
-BuzzOS is intentionally small but structured to grow. It is not a complete Unix yet:
+BuzzOS remains a teaching and experimentation system, not a complete Unix:
 
-- Stream sockets now keep per-socket TCP PCBs with lightweight input demux and small receive buffers. The TCP/IP stack is still a lightweight client implementation, with limited timeout, retransmission, and window behavior.
-- Futex wait/wake is scheduler-backed; `/proc/sync` and `futexblocktest` expose blocked waiter state.
-- The mini filesystem is fixed-size, uses direct blocks plus one indirect block, and has no journal.
-- The GUI is currently a 320x200x256 full-screen user-space manager with Paint, a GUI Shell, mouse input, and `/fs/apps` app launching. It is not a concurrent multi-window desktop yet.
-- Syscall user-pointer validation is range-based, not full page-permission validation.
-- There is no `fork` / `execve`, permission model, dynamic linker, signal system, or mature network stack yet.
+- No `fork/execve`, permission model, signals, dynamic linking, or mature device model.
+- The network stack is a lightweight client implementation; TCP timeout, retransmission, windowing, and long-lived connections are still limited.
+- minifs is a fixed-region, non-journaled small file system.
+- The desktop is a user-mode window manager, not a standalone GUI server; the app protocol is already decoupled and can continue to evolve.
+- Syscall user-pointer validation is still range checking, not full page-level permission verification.
 
-## Recommended Next Steps
+## Code Entry Points
 
-- Add stronger TCP socket regression coverage, timeout, retransmission, window, and larger receive-flow behavior.
-- Add `fork`, `execve`, shell quoting/env expansion, and job-control polish.
-- Add directory compaction, space-reclaim reporting, and stronger rename/unlink boundary tests to minifs.
-- Expand `/proc` with deeper socket, fd flag, and scheduler statistics.
-
-## Code Map
-
-- Bootloader: [src/boot/boot.asm](src/boot/boot.asm)
 - Kernel entry: [src/kernel/core/kernel.c](src/kernel/core/kernel.c)
+- Multiboot2 entry: [src/kernel/arch/i386/mb2_entry.asm](src/kernel/arch/i386/mb2_entry.asm)
+- Framebuffer driver: [src/kernel/drv/fb.c](src/kernel/drv/fb.c)
 - Scheduler/processes: [src/kernel/sched/task.c](src/kernel/sched/task.c)
 - Syscalls: [src/kernel/syscall/syscall.c](src/kernel/syscall/syscall.c)
 - Graphics syscall: [src/kernel/syscall/sys_gfx.c](src/kernel/syscall/sys_gfx.c)
 - VFS core: [src/kernel/fs/vfs.c](src/kernel/fs/vfs.c)
-- Filesystem adapters: [src/kernel/fs/ramfs.c](src/kernel/fs/ramfs.c), [src/kernel/fs/devfs.c](src/kernel/fs/devfs.c), [src/kernel/fs/minifs_vfs.c](src/kernel/fs/minifs_vfs.c), [src/kernel/fs/pipefs.c](src/kernel/fs/pipefs.c)
-- Mini FS disk format: [src/kernel/fs/minifs/minifs.c](src/kernel/fs/minifs/minifs.c)
-- ATA/block cache: [src/kernel/block](src/kernel/block)
+- Mini FS: [src/kernel/fs/minifs/minifs.c](src/kernel/fs/minifs/minifs.c)
 - Network stack: [src/kernel/net/net.c](src/kernel/net/net.c)
-- VGA/text/graphics driver: [src/kernel/drv/vga.c](src/kernel/drv/vga.c)
 - User shell: [src/user/bin/shell.c](src/user/bin/shell.c)
-- GUI desktop: [src/user/bin/gui.c](src/user/bin/gui.c)
-- Nano editor: [src/user/bin/nano.c](src/user/bin/nano.c)
-- In-OS assembler: [src/user/bin/basm.c](src/user/bin/basm.c)
+- Desktop: [src/user/bin/gui.c](src/user/bin/gui.c)
+- TextEdit: [src/user/bin/textedit.c](src/user/bin/textedit.c)
+- Paint: [src/user/bin/paint.c](src/user/bin/paint.c)
+- Calculator: [src/user/bin/calculator.c](src/user/bin/calculator.c)
+- GUI app protocol: [src/user/libc/guiapp.h](src/user/libc/guiapp.h)
 - User libc: [src/user/libc/libc.c](src/user/libc/libc.c)
-- Assembly tutorial: [docs/assembly-programming.md](docs/assembly-programming.md)
-- Local boot guide: [docs/boot-guide.md](docs/boot-guide.md)
-- User guide: [docs/user-guide.md](docs/user-guide.md)

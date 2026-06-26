@@ -1,10 +1,10 @@
 # BuzzOS
 
-BuzzOS 是一个面向学习和实验的极简 i386 POSIX-like 操作系统。它已经不只是启动骨架：当前版本有用户态 shell、多任务、系统调用、VFS、一个简单落盘文件系统、基础 TCP/UDP/ICMP socket、pipe 和 futex 风格同步接口。
+BuzzOS 是一个面向学习和实验的 i386 POSIX-like 操作系统。它已经演进成一个能启动用户态 shell、运行多任务、挂载持久化文件系统、联网，并通过 Limine framebuffer 显示桌面的完整小型系统。
 
 English: [README.en.md](README.en.md)
 
-项目日志：[CHANGELOG.md](CHANGELOG.md)。本地启动：[docs/boot-guide.md](docs/boot-guide.md)。用户指南：[docs/user-guide.md](docs/user-guide.md)。当前状态与路线图：[docs/project-status.md](docs/project-status.md)。运行 `make report` 可生成本地验证报告 `build/project-report.md`。
+相关文档：[CHANGELOG.md](CHANGELOG.md)、[本地启动指南](docs/boot-guide.md)、[用户指南](docs/user-guide.md)、[项目状态](docs/project-status.md)、[用户 GUI app 指南](docs/user-gui.md)。运行 `make report` 可以生成本地验证报告 `build/project-report.md`。
 
 <table>
   <tr>
@@ -15,170 +15,150 @@ English: [README.en.md](README.en.md)
     <td><img src="/pic/demo3.png" alt="BuzzOS demo 3"></td>
     <td><img src="/pic/demo4.png" alt="BuzzOS demo 4"></td>
   </tr>
-  <tr>
-    <td><img src="/pic/demo5.png" alt="BuzzOS demo 5"></td>
-    <td><img src="/pic/demo6.png" alt="BuzzOS demo 6"></td>
-  </tr>
 </table>
 
-## 当前能力
+## 当前状态
 
-- 16 位 BIOS 启动扇区，进入 32 位保护模式。
-- GDT、IDT、异常处理、PIC、PIT timer、键盘输入、VGA 文本输出、串口输出。
-- E820 物理内存探测、bitmap PMM、分页、用户态地址空间。
-- ELF32 用户程序加载，用户态 `/bin/sh` shell，支持 Ctrl+C、左右移动光标、Home/End、Delete、上下翻历史、多段 shell 管道和基础重定向。
-- 用户态 `nano` 编辑器和 `basm` 小型汇编器，可在 BuzzOS 内编辑、汇编并运行简单汇编程序。
-- 用户态 `gui` 桌面，通过 framebuffer blit、PS/2 鼠标和图形 syscall 提供 paint、内置 shell 与 `/fs/apps` GUI 程序启动器。
-- `/fs/apps` 默认种子用户 GUI：`guidemo` 单行文本框、`notes` 多行编辑器、`forms` 多文本框表单、`calc` 双输入计算器、持久化状态和 App Manager `.app` 元数据。
-- 种子用户 GUI 统一使用 `src/user/libc/gui_style.h` 的 shared 顶栏、面板、按钮、文本框、列表高亮、滚动条、滚轮状态、指针和状态色 helper，避免每个 app 各画一套控件。
-- 抢占式任务调度，进程/线程模型，`spawn`、`join`、`sleep`、`waitpid`、`kill`。
-- 系统调用 ABI：文件、进程、目录、网络、IPC、同步等基础接口。
-- VFS + mount table：
-  - `/`：initrd/ramfs，包含 `/hello`、`/bin/sh`、`/bin/echo` 和 `/bin/cat`
-  - `/dev`：独立 devfs，包含 `console`、`serial`、`null`
-  - `/fs`：mini ext-like 落盘文件系统，用户 GUI 程序推荐放在 `/fs/apps`
-- mini 文件系统：
-  - 目录、普通文件、`mkdir`、`rmdir`、`unlink`、`rename`
-  - `stat`、`getdents`、`open(O_CREAT/O_TRUNC/O_APPEND)`、`lseek`
-  - 固定磁盘区域，默认重建镜像时保留 `/fs`
-  - 128 个 inode，382 个数据块，直接块 + 一级 indirect block
-  - 单文件理论上限约 132 KiB，`/fs` 区域总大小 256 KiB
-- 块设备层：
-  - ATA PIO 扇区读写
-  - 简单 write-through block cache
-- 网络：
-  - NE2000/QEMU user-mode network
-  - DHCP 初始化、DNS、TCP client、UDP datagram、ICMP echo
-  - 用户态 socket API：`socket/connect/send/recv/bind/sendto/recvfrom`
-- IPC/同步：
-  - `pipe(int fds[2])`，支持阻塞读写唤醒
-  - shell 示例：`echo hello | cat | cat`、`echo saved > /fs/out`、`cat < /fs/out`
-  - `futex_wait` / `futex_wake`
-- 多接口项目介绍面：`/proc/about`、文本 shell `about`、GUI shell `about` 和 `make report` 暴露同一套轻量项目介绍与文档地图。
-- 多接口健康面板：`/proc/health`、文本 shell `health`、GUI shell `health` 和 `make report` 使用同一套轻量状态口径。
-- 多接口能力矩阵：`/proc/interfaces`、文本 shell `interfaces`、GUI shell `interfaces` 和 `make report` 暴露稳定/实验性入口。
-- 轻量运行限制面：`/proc/limits`、文本 shell `limits`、GUI shell `limits` 和 `make report` 暴露任务、fd、pipe、mount、内存与 minifs 容量边界。
-- 轻量文件系统状态面：`/proc/fs`、文本 shell `fsinfo`、GUI shell `fsinfo`、`fsstat`、smoke 和 `make report` 共同暴露 `/fs`/minifs 状态。
+- 启动链路：Limine BIOS + multiboot2，默认请求 `1280x800x32` framebuffer。
+- 内核：GDT、IDT、异常处理、PIC、PIT、串口、PS/2 键鼠、分页、E820/PMM、ELF32 loader。
+- 用户态：`/bin/sh` shell、`nano`、`basm`、`cat`、`echo`、`gui`。
+- 桌面：用户态多窗口桌面，支持窗口激活置顶、拖动、缩放、最小化、最大化、关闭和滚动条。
+- GUI app：TextEdit、Paint、Calculator 作为独立用户 ELF 程序，通过 `/fs/apps/*.app` manifest 注册。
+- 文件系统：VFS + initrd/ramfs + devfs + 持久化 minifs，`/fs` 默认随镜像重建保留。
+- 网络：QEMU NE2000、DHCP、DNS、ICMP、UDP、TCP client 和用户态 socket API。
+- IPC/同步：pipe、阻塞读写唤醒、futex wait/wake。
+- 诊断接口：`/proc/about`、`/proc/health`、`/proc/interfaces`、`/proc/limits`、`/proc/fs`，并暴露到文本 shell、GUI shell 和 `make report`。
 
-## 构建与运行
+## 快速运行
 
-需要这些工具：
+需要工具：
 
 | 工具 | 用途 |
 | --- | --- |
-| `nasm` | 汇编 bootloader 和内核汇编 |
+| `nasm` | 汇编内核入口和中断桩 |
 | `clang` | 编译 freestanding C 内核和用户程序 |
 | `ld.lld` | 链接内核和 ELF 用户程序 |
-| `llvm-objcopy` | 生成 raw kernel binary |
-| `make` | 构建入口 |
-| `powershell` | Windows 下打包镜像 |
+| `llvm-objcopy` | 生成辅助二进制产物 |
+| `python` | 生成 initrd、app registry、磁盘镜像 |
+| `powershell` | Windows 下运行脚本 |
 | `qemu-system-i386` | 运行 BuzzOS |
+| Limine binary 包 | 安装 BIOS 启动阶段 |
 
-查看本地工作流命令：
+默认 Limine 路径是：
 
 ```sh
-make help
+D:/limine-binary/limine-binary
 ```
 
-第一次本地运行建议先看 [docs/boot-guide.md](docs/boot-guide.md)，进入系统后的 shell、GUI 和文本框操作见 [docs/user-guide.md](docs/user-guide.md)。
+这个目录至少需要包含：
 
-先检查本地构建和运行环境：
+```text
+limine-bios.sys
+limine-tool-windows-x86/limine.exe
+```
+
+如果路径不同，构建时传 `LIMINE_DIR=...`。
+
+检查本机环境：
 
 ```sh
 make doctor QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-`make doctor` 会运行 `tools/doctor.py`，检查 `python`、`make`、PowerShell、NASM、LLVM 工具链和 QEMU 路径。
-
-构建镜像：
-
-```sh
-make
-```
-
 构建并运行：
 
 ```sh
+make
 make run
 ```
 
-在可见 QEMU 窗口中运行，并把串口日志写到 `build/serial-live.log`，避免终端串口占住输入：
+在可见 QEMU 窗口运行，并把串口日志写入 `build/serial-live.log`：
 
 ```sh
 make run-local QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-直接启动到 GUI 管理器或指定用户 GUI 示例：
+直接启动后进入桌面：
 
 ```sh
 make run-gui QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-guidemo QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-notes QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-forms QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-make run-calc QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-只运行已有镜像，不触发重新构建：
-
-```sh
-make run-current
-```
-
-运行 smoke 测试：
-
-```sh
-make smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-```
-
-运行快速项目一致性检查：
-
-```sh
-make check-project
-```
-
-运行 GUI smoke 测试。它会启动镜像副本，自动操作 `forms`、`notes`、`guidemo`，检查截图不是空白，并把 PNG 写到 `build/gui-smoke`：
-
-```sh
-make gui-smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-```
-
-运行当前全部验证：
-
-```sh
-make verify QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
-```
-
-重建镜像并清空 `/fs` 文件系统区域：
+重建镜像并清空 `/fs`：
 
 ```sh
 make image-reset-fs
 ```
 
-如果 `make` 报 `build/buzzos.img` 或 `build/user/*.o` 被占用，通常是 QEMU 还在运行。关掉 QEMU 后再构建。
+如果 `build/buzzos.img` 或 `build/user/*.o` 被占用，通常是 QEMU 还在运行。关掉 QEMU 后再构建。
 
-## 镜像布局
+## 桌面和 App
 
-`build/buzzos.img` 是一块 raw 磁盘镜像：
+文本 shell 中输入：
 
-| 区域 | 用途 |
-| --- | --- |
-| LBA 0 | boot sector |
-| LBA 1..767 | kernel 预留区，最多 383 KiB |
-| LBA 768..1279 | `/fs` mini 文件系统区域，256 KiB |
-
-`tools/mkimage.ps1` 默认会在重建镜像时保留旧镜像的 `/fs` 区域。需要清空时显式运行 `make image-reset-fs`。检查和修复 `/fs` 时可以使用：
-
-```sh
-make fs-check
-make fs-ls
-make fs-repair
+```text
+gui
 ```
 
-`make fs-repair` 默认写出 `build/buzzos-repaired.img`，不会覆盖当前镜像。
+桌面默认打开：
 
-## Shell 命令
+- `Applications`：应用列表和 manifest 详情。
+- `Terminal`：桌面内 shell 窗口。
+- `System`：系统状态面板。
 
-启动后会进入用户态 shell：
+窗口支持：
+
+- 点击激活并置顶。
+- 拖动标题栏移动。
+- 拖动边缘或角落调整大小。
+- 最小化、最大化、关闭。
+- 鼠标滚轮和滚动条。
+
+默认用户 GUI app：
+
+| App | 说明 |
+| --- | --- |
+| TextEdit | 文本编辑器，编辑区随窗口大小变化，支持回车、光标移动、水平/垂直滚动条，保存到 `/fs/textedit.txt` |
+| Paint | 位图绘图工具，画布和工具栏随窗口大小变化，支持画笔、橡皮、直线、矩形、填充和连续笔画 |
+| Calculator | 表达式计算器，支持括号、小数和常见四则表达式 |
+
+Text shell 里可以查看 app 信息：
+
+```text
+apps
+apps info textedit
+apps info paint
+apps info calculator
+```
+
+GUI app 由桌面启动，不再从文本 shell 里直接运行图形 app。
+
+## 写自己的 GUI App
+
+新增 app 的推荐路径：
+
+```sh
+make new-app APP=myapp
+```
+
+然后：
+
+1. 在 `src/user/bin/myapp.c` 实现用户态 app。
+2. 在 `src/user/bin/myapp.app` 写 manifest。
+3. 把 `myapp` 加进 `Makefile` 的 `GUI_APP_NAMES`。
+4. 运行：
+
+```sh
+make app-registry
+make app-check
+make image-reset-fs run
+```
+
+GUI app 协议在 [src/user/libc/guiapp.h](src/user/libc/guiapp.h)，基础控件绘制在 [src/user/libc/appui.h](src/user/libc/appui.h)。桌面通过 pipe 发送初始化、resize、mouse、key、close 事件，app 返回完整帧或 dirty rect。
+
+## Shell 常用命令
+
+启动后进入：
 
 ```text
 === BuzzOS User Shell ===
@@ -188,10 +168,7 @@ buzzos:/>
 常用命令：
 
 ```text
-ls [path]
-cd [path]
-pwd
-stat <path>
+help
 about
 health
 interfaces
@@ -199,21 +176,21 @@ limits
 fsinfo
 fsstat
 fdstat
+ls [path]
+cd [path]
+pwd
+stat <path>
 cat <file>
 mkdir <dir>
 rmdir <dir>
 touch <file>
 write <file> <text>
+rm <file>
+mv <old> <new>
 nano <file>
 basm <input.asm> [output]
 gui
-apps [list|info <name>|run <name>]
-guidemo
-notes
-forms
-calc
-rm <file>
-mv <old> <new>
+apps [list|info <name>]
 exec <program> [args...] [&|bg]
 wait [pid]
 kill <pid>
@@ -230,11 +207,15 @@ ping <host-or-ip>
 wget <host> [port]
 tcptwotest <host> <port-a> <port-b>
 dhcp
-elfbadtest
+netstat
 pipetest
 pipeedgetest
 pipeblocktest
 futextest
+futextimeouttest
+futexcanceltest
+futexblocktest
+elfbadtest
 ```
 
 在 BuzzOS 内写汇编并运行：
@@ -245,90 +226,81 @@ basm /fs/demo.asm /fs/demo
 exec /fs/demo
 ```
 
-`nano` 里可以按 `Ctrl+T` 插入一个最小汇编模板，`Ctrl+S` 保存，`Ctrl+C` 退出。
+`nano` 中 `Ctrl+T` 可插入最小汇编模板，`Ctrl+S` 保存，`Ctrl+C` 退出。
 
-`basm` 不是完整 NASM，而是面向 BuzzOS 教学和实验的小型 assembler。它支持 `bits/global/section/%define/equ/label`、`db/dd`、`mov/xor/int/ret/nop/push/pop/call/jmp/jcc/add/sub/cmp` 等常用子集，输出的是 BuzzOS loader 可直接执行的 ELF32 文件。
+## 镜像布局
 
-图形桌面：
+`build/buzzos.img` 是 raw 磁盘镜像：
 
-```text
-gui
+| 区域 | 用途 |
+| --- | --- |
+| LBA 0 | MBR，Limine BIOS stage 安装在这里 |
+| LBA 2048..67583 | FAT16 boot 分区，包含 `kernel.elf`、`limine.conf`、`limine-bios.sys` |
+| LBA 67584..71679 | raw `/fs` minifs 分区，默认 4096 sectors / 2 MiB |
+
+`tools/mkbootimg.py` 默认保留旧镜像的 `/fs` 区域。需要清空时运行 `make image-reset-fs`。
+
+检查和修复 `/fs`：
+
+```sh
+make fs-check
+make fs-ls
+make fs-repair
 ```
 
-进入后先显示 APP MANAGER，由用户选择 Paint、Shell 或 `/fs/apps` 里的外部 GUI 程序。应用列表和详情面板支持鼠标滚轮滚动，`Up/Down` 选择应用，`Left/Right` 滚动详情。Paint 用鼠标绘图；Shell 支持 `help`、`about`、`health`、`limits`、`interfaces`、`fsinfo`、`ls`、`cat`、`echo`、`apps`、`run <path>` 等内置命令。把 ELF32 GUI 程序放到 `/fs/apps/<name>` 后，可在管理器内点击或在 GUI Shell 里用 `run /fs/apps/<name>` 启动；外部 GUI 程序退出后会回到管理器。
+`make fs-repair` 默认写出 `build/buzzos-repaired.img`，不会覆盖当前镜像。
 
-当前内置的用户态 GUI 示例包括：
+## 验证
 
-- `guidemo`：按钮、色块、单行文本框、鼠标输入和 `/fs/apps/guidemo.cfg` 持久化状态。
-- `notes`：多行文本编辑器，保存到 `/fs/apps/notes.txt`。
-- `forms`：四个单行文本框，支持鼠标聚焦、Tab/Enter 切换、Left/Right/Home/End/Delete 编辑、实时预览和 `/fs/apps/forms.cfg` 持久化状态。
-- `calc`：两个单行输入框、运算按钮、键盘编辑、结果反馈和 `/fs/apps/calc.cfg` 持久化状态。
+快速一致性检查：
 
-每个用户 GUI app 可以在可执行文件旁放一个 `.app` manifest，使用简单的 `key=value` 字段，例如 `name`、`kind`、`version`、`summary`、`state`、`source`。App Manager 会读取这些字段显示详情，同时仍然从磁盘启动 ELF 可执行文件。
-
-文本 shell 也可以查看和启动同一套 app 模型：
-
-```text
-apps
-apps info forms
-apps run forms
+```sh
+make check-project
 ```
 
-应用内按 `Esc` 或 `Ctrl+C` 返回管理器，管理器内再按一次返回文本 shell。
+串口 smoke：
 
-当前 GUI 是一个用户态全屏 app manager，不是完整窗口系统。内核只提供 VGA 13h 图形模式、framebuffer blit、PS/2 鼠标状态和图形 syscall；界面布局、绘画程序、GUI Shell、外部 app 启动和鼠标光标都在 `/bin/gui` 用户程序里实现。这样能保持内核小而稳定，也方便后续把它演进成真正的 GUI server。
+```sh
+make smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
 
-文件系统测试示例：
+GUI smoke：
 
-```text
-fsinfo
-cat /proc/fs
-fsstat
-mkdir /fs/a
-write /fs/a/t hello
-cat /fs/a/t
-stat /fs/a/t
-mv /fs/a/t /fs/a/u
-rm /fs/a/u
-rmdir /fs/a
+```sh
+make gui-smoke QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
+
+完整验证：
+
+```sh
+make verify QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
 ## 设计边界
 
-BuzzOS 当前是“小而可扩展”的实现，不是完整 Unix：
+BuzzOS 仍然是教学和实验系统，不是完整 Unix：
 
-- TCP stream socket 已经使用 per-socket PCB、轻量输入 demux 和小接收缓冲；网络栈仍是轻量 client 实现，超时、重传和窗口能力还有限。
-- futex wait/wake 已接入 scheduler 阻塞与唤醒；`/proc/sync` 和 `futexblocktest` 可观察等待状态。
-- mini 文件系统是固定大小、直接块 + 一级 indirect block、无日志的教学实现。
-- GUI 当前是 320x200x256 的全屏用户态管理器，支持 Paint、GUI Shell、鼠标和 `/fs/apps` app 启动；它还不是并发多窗口桌面。
-- syscall 用户指针校验是范围检查，不是完整页级权限验证。
-- 还没有 `fork/execve`、权限模型、动态链接、信号、成熟网络协议栈。
-
-## 推荐下一步
-
-- 增加更多 TCP socket 回归测试，并继续完善超时、重传、窗口和更大的接收流场景。
-- 增加 `fork` / `execve` / shell 引号与环境变量展开 / job control 打磨。
-- 给 minifs 增加目录压缩、空间回收统计和更完整的 rename/unlink 边界测试。
-- 继续扩展 `/proc`，补齐更细的 socket、fd flag 和调度统计。
+- 没有 `fork/execve`、权限模型、信号、动态链接和成熟设备模型。
+- 网络栈是轻量 client 实现，TCP 超时、重传、窗口和长期连接能力仍有限。
+- minifs 是固定区域、无日志的小文件系统。
+- 桌面是用户态窗口管理器，不是独立 GUI server；app 协议已经拆出来，后续可以继续演进。
+- syscall 用户指针校验仍是范围检查，不是完整页级权限验证。
 
 ## 代码入口
 
-- Bootloader: [src/boot/boot.asm](src/boot/boot.asm)
 - Kernel entry: [src/kernel/core/kernel.c](src/kernel/core/kernel.c)
+- Multiboot2 entry: [src/kernel/arch/i386/mb2_entry.asm](src/kernel/arch/i386/mb2_entry.asm)
+- Framebuffer driver: [src/kernel/drv/fb.c](src/kernel/drv/fb.c)
 - Scheduler/processes: [src/kernel/sched/task.c](src/kernel/sched/task.c)
 - Syscalls: [src/kernel/syscall/syscall.c](src/kernel/syscall/syscall.c)
 - Graphics syscall: [src/kernel/syscall/sys_gfx.c](src/kernel/syscall/sys_gfx.c)
 - VFS core: [src/kernel/fs/vfs.c](src/kernel/fs/vfs.c)
-- Filesystem adapters: [src/kernel/fs/ramfs.c](src/kernel/fs/ramfs.c), [src/kernel/fs/devfs.c](src/kernel/fs/devfs.c), [src/kernel/fs/minifs_vfs.c](src/kernel/fs/minifs_vfs.c), [src/kernel/fs/pipefs.c](src/kernel/fs/pipefs.c)
-- Mini FS disk format: [src/kernel/fs/minifs/minifs.c](src/kernel/fs/minifs/minifs.c)
-- ATA/block cache: [src/kernel/block](src/kernel/block)
+- Mini FS: [src/kernel/fs/minifs/minifs.c](src/kernel/fs/minifs/minifs.c)
 - Network stack: [src/kernel/net/net.c](src/kernel/net/net.c)
-- VGA/text/graphics driver: [src/kernel/drv/vga.c](src/kernel/drv/vga.c)
 - User shell: [src/user/bin/shell.c](src/user/bin/shell.c)
-- GUI desktop: [src/user/bin/gui.c](src/user/bin/gui.c)
-- Nano editor: [src/user/bin/nano.c](src/user/bin/nano.c)
-- In-OS assembler: [src/user/bin/basm.c](src/user/bin/basm.c)
+- Desktop: [src/user/bin/gui.c](src/user/bin/gui.c)
+- TextEdit: [src/user/bin/textedit.c](src/user/bin/textedit.c)
+- Paint: [src/user/bin/paint.c](src/user/bin/paint.c)
+- Calculator: [src/user/bin/calculator.c](src/user/bin/calculator.c)
+- GUI app protocol: [src/user/libc/guiapp.h](src/user/libc/guiapp.h)
 - User libc: [src/user/libc/libc.c](src/user/libc/libc.c)
-- Assembly tutorial: [docs/assembly-programming.md](docs/assembly-programming.md)
-- Local boot guide: [docs/boot-guide.md](docs/boot-guide.md)
-- User guide: [docs/user-guide.md](docs/user-guide.md)
