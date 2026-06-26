@@ -650,13 +650,16 @@ def check_procfs_diagnostics():
 def check_host_doctor():
     makefile = read_text("Makefile")
     doctor = read_text("tools/doctor.py")
+    workflow = read_text("tools/workflow.py")
     report_py = read_text("tools/project_report.py")
     readme = read_text("README.md")
     readme_en = read_text("README.en.md")
     changelog = read_text("CHANGELOG.md")
 
     for snippet in [
-        ".PHONY: all clean doctor",
+        ".PHONY: all clean help doctor",
+        "help:",
+        "tools/workflow.py",
         "doctor:",
         "tools/doctor.py --python",
         "--qemu \"$(QEMU)\"",
@@ -678,9 +681,27 @@ def check_host_doctor():
             fail(f"tools/doctor.py is missing expected host check: {snippet}")
 
     for snippet in [
+        "WORKFLOW =",
+        "make doctor",
+        "make run-local",
+        "make run-forms",
+        "make smoke",
+        "make gui-smoke",
+        "make verify",
+        "make report",
+        "make image-reset-fs",
+        "--markdown",
+    ]:
+        if snippet not in workflow:
+            fail(f"tools/workflow.py is missing expected local workflow item: {snippet}")
+
+    for snippet in [
         "collect_host_doctor",
+        "collect_local_workflow",
         "## Host Doctor",
+        "## Local Workflow",
         "tools/doctor.py",
+        "make help",
         "--soft",
         "--no-version",
         "make doctor",
@@ -688,13 +709,14 @@ def check_host_doctor():
         if snippet not in report_py:
             fail(f"project report is missing host doctor summary: {snippet}")
 
-    for snippet in ["make doctor", "QEMU=", "tools/doctor.py"]:
+    for snippet in ["make help", "make doctor", "QEMU=", "tools/doctor.py"]:
         if snippet not in readme or snippet not in readme_en:
             fail(f"README files are missing host doctor guidance: {snippet}")
-    if "make doctor" not in changelog:
-        fail("CHANGELOG is missing make doctor entry")
+    for snippet in ["make help", "make doctor"]:
+        if snippet not in changelog:
+            fail(f"CHANGELOG is missing workflow entry: {snippet}")
 
-    ok("host doctor: make target, tool checks, report summary, and docs are covered")
+    ok("host workflow: make help, doctor, report summary, and docs are covered")
 
 
 def check_futex_blocking():

@@ -29,7 +29,8 @@ filesystem, and a user-space GUI app manager.
   `summary`, `state`, `source`, and `readme` metadata for the App Center.
 - App registry: `tools/gen_app_registry.py` generates `src/kernel/app_registry.h`
   from app sidecar metadata so kernel seeding stays data-driven.
-- Host tooling: `make doctor` / `tools/doctor.py` preflights the local Python,
+- Host tooling: `make help` / `tools/workflow.py` lists the recommended local
+  workflow, and `make doctor` / `tools/doctor.py` preflights the local Python,
   Make, PowerShell, NASM, LLVM, QEMU, and workspace paths.
 - Initrd hygiene: user ELF payloads are section-stripped before embedding, and
   `tools/mkinitrd.py` emits compact 32-byte rows to reduce generated diff noise.
@@ -71,6 +72,12 @@ filesystem, and a user-space GUI app manager.
   blocking, and edge behavior for pipe/futex primitives.
 
 ## Local Workflow
+
+Show the local workflow:
+
+```sh
+make help
+```
 
 Check local tools before building:
 

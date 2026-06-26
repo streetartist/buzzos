@@ -105,9 +105,12 @@ INITRD_H := src/kernel/initrd.h
 APP_REGISTRY_H := src/kernel/app_registry.h
 GUI_APP_META := $(foreach app,$(GUI_APP_NAMES),$(wildcard src/user/bin/$(app).app src/user/bin/$(app).readme src/user/bin/$(app).seed))
 
-.PHONY: all clean doctor run run-current run-local run-forms check-project app-check app-registry fs-check fs-ls fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
+.PHONY: all clean help doctor run run-current run-local run-forms check-project app-check app-registry fs-check fs-ls fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
 
 all: $(IMAGE)
+
+help:
+	$(PYTHON) tools/workflow.py
 
 $(OBJDIR):
 	powershell -NoProfile -Command "New-Item -ItemType Directory -Force '$(OBJDIR)' | Out-Null"

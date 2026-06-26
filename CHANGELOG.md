@@ -61,6 +61,8 @@ short log for reviewers and contributors; deeper design notes live under
 
 ### Filesystem And Tooling
 
+- Added `make help` / `tools/workflow.py` to print the recommended local
+  workflow without building the image.
 - Added `make doctor` / `tools/doctor.py` to preflight local Python, Make,
   PowerShell, NASM, LLVM, QEMU, and workspace paths before building or running.
 - Added host-side minifs checks, negative checks, and repair checks.

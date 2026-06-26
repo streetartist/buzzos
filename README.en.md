@@ -82,6 +82,12 @@ Required tools:
 | `powershell` | Image packing on Windows |
 | `qemu-system-i386` | Runs BuzzOS |
 
+Show the local workflow commands:
+
+```sh
+make help
+```
+
 Check the local build and run environment first:
 
 ```sh

@@ -72,6 +72,12 @@ English: [README.en.md](README.en.md)
 | `powershell` | Windows 下打包镜像 |
 | `qemu-system-i386` | 运行 BuzzOS |
 
+查看本地工作流命令：
+
+```sh
+make help
+```
+
 先检查本地构建和运行环境：
 
 ```sh

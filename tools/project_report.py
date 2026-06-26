@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from check_minifs import FsError, MiniFsImage, parse_make_int
+from workflow import WORKFLOW
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,6 +85,17 @@ def collect_host_doctor(python_cmd, make_cmd, qemu_cmd):
             "hint": row.get("hint", ""),
         })
     return rows
+
+
+def collect_local_workflow():
+    return [
+        {
+            "phase": row["phase"],
+            "command": row["command"],
+            "purpose": row["purpose"],
+        }
+        for row in WORKFLOW
+    ]
 
 
 def elf_load_end(path):
@@ -425,6 +437,10 @@ def build_report(python_cmd="python", make_cmd="make", qemu_cmd="qemu-system-i38
     lines.extend(table(["check", "status", "path", "hint"], collect_host_doctor(python_cmd, make_cmd, qemu_cmd)))
     lines.append("")
 
+    lines.append("## Local Workflow")
+    lines.extend(table(["phase", "command", "purpose"], collect_local_workflow()))
+    lines.append("")
+
     lines.append("## Project Identity")
     lines.extend(table(["item", "value"], collect_project_identity()))
     lines.append("")
@@ -537,6 +553,7 @@ def build_report(python_cmd="python", make_cmd="make", qemu_cmd="qemu-system-i38
     lines.append("- `make verify` runs project checks, serial smoke with deterministic single/dual TCP socket coverage, minifs positive/negative/repair checks, and GUI smoke.")
     lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface/limit diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
     lines.append("- `make fs-check-repair` verifies conservative minifs repair on disposable corrupted image copies.")
+    lines.append("- `make help` prints the recommended local workflow without building the image.")
     lines.append("- `make doctor` checks the host build/run tools before a user spends time on a failing build.")
     lines.append("- `make report` writes this summary to `build/project-report.md`.")
     if headroom_status == "low":
