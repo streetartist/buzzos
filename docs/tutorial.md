@@ -1258,14 +1258,17 @@ shell 会启动 `/bin/gui`，等待它退出，然后回到文本 shell。
 
 - `PAINT`：简单绘画程序。
 - `SHELL`：GUI 内置 shell 面板。
-- `REFRESH`：重新扫描 `/fs/apps`。
+- `HELP`：GUI 使用说明。
+- `SCAN`：重新扫描 `/fs/apps`。
 - `/fs/apps/*`：用户放进去的外部 app。
 
 基本操作：
 
 - 鼠标移动光标。
 - 左键点击 app、按钮或画布。
-- 方向键也能移动光标，作为没有鼠标时的 fallback。
+- 在 APP MANAGER 中，`Up/Down` 选择 app，`Left/Right` 滚动详情。
+- 鼠标滚轮在 app 列表上滚动选择，在详情面板上滚动详情内容。
+- 在非管理器界面，方向键也能移动光标，作为没有鼠标时的 fallback。
 - `Esc` 或 `Ctrl+C`：在 app 内返回管理器；在管理器内退出 GUI。
 
 这套交互路径适合当前阶段：先有一个能用的图形环境，再逐步演进成 GUI server。
@@ -1277,7 +1280,7 @@ shell 会启动 `/bin/gui`，等待它退出，然后回到文本 shell。
 | 层 | 代码位置 | 责任 |
 | --- | --- | --- |
 | VGA 驱动 | [src/kernel/drv/vga.c](../src/kernel/drv/vga.c) | 文本模式、13h 图形模式、像素/矩形/文字/blit |
-| 鼠标驱动 | [src/kernel/drv/mouse.c](../src/kernel/drv/mouse.c) | 初始化 PS/2 mouse、解析三字节数据包、维护坐标和按钮 |
+| 鼠标驱动 | [src/kernel/drv/mouse.c](../src/kernel/drv/mouse.c) | 初始化 PS/2 mouse、解析三字节或 IntelliMouse 四字节数据包、维护坐标、按钮和滚轮 |
 | 图形 syscall | [src/kernel/syscall/sys_gfx.c](../src/kernel/syscall/sys_gfx.c) | 把用户态 `gfx_*`/`mouse_get` 调用转给 VGA 和 mouse 驱动 |
 | GUI 用户程序 | [src/user/bin/gui.c](../src/user/bin/gui.c) | 管理器、Paint、GUI Shell、外部 app 启动、光标绘制 |
 
@@ -1349,7 +1352,7 @@ PS/2 键盘和鼠标共享 8042 控制器，所以鼠标驱动不能随便读端
 1. `mouse_init()` 初始化辅助 PS/2 设备。
 2. IDT 注册 IRQ12。
 3. IRQ12 只在状态位显示“这是 mouse 数据”时读取 `0x60`。
-4. `mouse_handler()` 解析三字节 PS/2 packet。
+4. `mouse_handler()` 解析三字节 PS/2 packet；如果初始化识别到 IntelliMouse，则解析四字节 packet 的滚轮字段。
 5. 内核保存：
 
 ```c
@@ -1360,10 +1363,12 @@ struct mouse_state {
     int dx;
     int dy;
     uint32_t seq;
+    int wheel;
+    uint32_t wheel_seq;
 };
 ```
 
-`seq` 是事件序号。GUI 每帧调用 `mouse_get()`，如果 `seq` 变了，说明鼠标有新数据，再更新光标位置。这样用户态不需要知道 PS/2 packet 细节。
+`seq` 是移动/按钮事件序号，`wheel` 是累计滚轮位置，`wheel_seq` 是滚轮事件序号。GUI 每帧调用 `mouse_get()`，如果 `seq` 变了就同步光标位置，如果 `wheel_seq` 变了就用两次 `wheel` 的差值按指针所在区域滚动列表或详情。这样用户态不需要知道 PS/2 packet 细节，也不会因为后续普通移动包覆盖最后一次滚轮 delta 而丢事件。
 
 键盘仍然走 `/dev/console`：
 
@@ -1504,7 +1509,7 @@ basm /fs/apps/card.asm /fs/apps/card
 gui
 ```
 
-在 APP MANAGER 里点 `REFRESH`，然后点击 `card`。
+在 APP MANAGER 里点 `SCAN`，然后点击 `card`。
 
 这个例子说明了当前外部 GUI app 的本质：它仍然是一个普通 ELF32 用户程序，只是调用了图形 syscall。它没有窗口、没有焦点协议，也不会和 manager 同屏并发显示。
 

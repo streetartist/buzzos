@@ -1,15 +1,11 @@
 #include "paging.h"
 #include "pmm.h"
 #include "serial.h"
+#include "user_bounds.h"
 
 __attribute__((aligned(4096))) static uint32_t page_directory[1024];
 __attribute__((aligned(4096))) static uint32_t page_table_0[1024];
 __attribute__((aligned(4096))) static uint32_t page_table_1[1024];
-
-enum {
-    USER_SPACE_START = 0x001C0000,
-    USER_SPACE_END   = 0x00280000,
-};
 
 static void zero_page(uint32_t *page) {
     for (int i = 0; i < 1024; i++)

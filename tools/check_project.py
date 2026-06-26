@@ -171,18 +171,28 @@ def check_kernel_memory_layout():
 
 
 def check_user_bounds():
+    bounds_h = read_text("src/kernel/arch/i386/user_bounds.h")
     elf_c = read_text("src/kernel/core/elf.c")
     syscall_h = read_text("src/kernel/syscall/syscall_internal.h")
     paging_c = read_text("src/kernel/arch/i386/paging.c")
     user_h = read_text("src/kernel/arch/i386/user.h")
 
-    load_start = parse_hex_constant(elf_c, "USER_LOAD_START")
-    load_end = parse_hex_constant(elf_c, "USER_LOAD_END")
-    ptr_start = parse_hex_constant(syscall_h, "USER_PTR_START")
-    ptr_end = parse_hex_constant(syscall_h, "USER_PTR_END")
-    space_start = parse_hex_constant(paging_c, "USER_SPACE_START")
-    space_end = parse_hex_constant(paging_c, "USER_SPACE_END")
-    stack_top = parse_hex_constant(user_h, "USER_DEFAULT_STACK_TOP")
+    for path, text in [
+        ("src/kernel/core/elf.c", elf_c),
+        ("src/kernel/syscall/syscall_internal.h", syscall_h),
+        ("src/kernel/arch/i386/paging.c", paging_c),
+        ("src/kernel/arch/i386/user.h", user_h),
+    ]:
+        if '#include "user_bounds.h"' not in text:
+            fail(f"{path} should include shared user_bounds.h")
+
+    load_start = parse_hex_constant(bounds_h, "USER_LOAD_START")
+    load_end = parse_hex_constant(bounds_h, "USER_LOAD_END")
+    ptr_start = parse_hex_constant(bounds_h, "USER_PTR_START")
+    ptr_end = parse_hex_constant(bounds_h, "USER_PTR_END")
+    space_start = parse_hex_constant(bounds_h, "USER_SPACE_START")
+    space_end = parse_hex_constant(bounds_h, "USER_SPACE_END")
+    stack_top = parse_hex_constant(bounds_h, "USER_DEFAULT_STACK_TOP")
 
     if not (load_start == ptr_start == space_start):
         fail("user start constants differ across ELF/syscall/paging")

@@ -29,7 +29,7 @@ English: [README.en.md](README.en.md)
 - ELF32 用户程序加载，用户态 `/bin/sh` shell，支持 Ctrl+C、左右移动光标、Home/End、Delete、上下翻历史、多段 shell 管道和基础重定向。
 - 用户态 `nano` 编辑器和 `basm` 小型汇编器，可在 BuzzOS 内编辑、汇编并运行简单汇编程序。
 - 用户态 `gui` 桌面，通过 framebuffer blit、PS/2 鼠标和图形 syscall 提供 paint、内置 shell 与 `/fs/apps` GUI 程序启动器。
-- `/fs/apps` 默认种子用户 GUI：`guidemo` 单行文本框、`notes` 多行编辑器、`forms` 多文本框表单、`calc` 双输入计算器、持久化状态和 App Center `.app` 元数据。
+- `/fs/apps` 默认种子用户 GUI：`guidemo` 单行文本框、`notes` 多行编辑器、`forms` 多文本框表单、`calc` 双输入计算器、持久化状态和 App Manager `.app` 元数据。
 - 种子用户 GUI 统一使用 `src/user/libc/gui_style.h` 的 shared 顶栏、面板、按钮、文本框、指针和状态色 helper，避免每个 app 各画一套控件。
 - 抢占式任务调度，进程/线程模型，`spawn`、`join`、`sleep`、`waitpid`、`kill`。
 - 系统调用 ABI：文件、进程、目录、网络、IPC、同步等基础接口。
@@ -255,7 +255,7 @@ exec /fs/demo
 gui
 ```
 
-进入后先显示 APP MANAGER，由用户选择 Paint、Shell 或 `/fs/apps` 里的外部 GUI 程序。Paint 用鼠标绘图；Shell 支持 `help`、`about`、`health`、`limits`、`interfaces`、`fsinfo`、`ls`、`cat`、`echo`、`apps`、`run <path>` 等内置命令。把 ELF32 GUI 程序放到 `/fs/apps/<name>` 后，可在管理器内点击或在 GUI Shell 里用 `run /fs/apps/<name>` 启动；外部 GUI 程序退出后会回到管理器。
+进入后先显示 APP MANAGER，由用户选择 Paint、Shell 或 `/fs/apps` 里的外部 GUI 程序。应用列表和详情面板支持鼠标滚轮滚动，`Up/Down` 选择应用，`Left/Right` 滚动详情。Paint 用鼠标绘图；Shell 支持 `help`、`about`、`health`、`limits`、`interfaces`、`fsinfo`、`ls`、`cat`、`echo`、`apps`、`run <path>` 等内置命令。把 ELF32 GUI 程序放到 `/fs/apps/<name>` 后，可在管理器内点击或在 GUI Shell 里用 `run /fs/apps/<name>` 启动；外部 GUI 程序退出后会回到管理器。
 
 当前内置的用户态 GUI 示例包括：
 
@@ -264,7 +264,7 @@ gui
 - `forms`：四个单行文本框，支持鼠标聚焦、Tab/Enter 切换、Left/Right/Home/End/Delete 编辑、实时预览和 `/fs/apps/forms.cfg` 持久化状态。
 - `calc`：两个单行输入框、运算按钮、键盘编辑、结果反馈和 `/fs/apps/calc.cfg` 持久化状态。
 
-每个用户 GUI app 可以在可执行文件旁放一个 `.app` manifest，使用简单的 `key=value` 字段，例如 `name`、`kind`、`version`、`summary`、`state`、`source`。App Center 会读取这些字段显示详情，同时仍然从磁盘启动 ELF 可执行文件。
+每个用户 GUI app 可以在可执行文件旁放一个 `.app` manifest，使用简单的 `key=value` 字段，例如 `name`、`kind`、`version`、`summary`、`state`、`source`。App Manager 会读取这些字段显示详情，同时仍然从磁盘启动 ELF 可执行文件。
 
 文本 shell 也可以查看和启动同一套 app 模型：
 

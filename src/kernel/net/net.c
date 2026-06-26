@@ -3,6 +3,7 @@
 #include "net.h"
 #include "netdev.h"
 #include "serial.h"
+#include "task.h"
 
 static void *memset(void *d, int c, size_t n) { for (size_t i=0;i<n;i++) ((uint8_t*)d)[i]=(uint8_t)c; return d; }
 static void *memcpy(void *d, const void *s, size_t n) { for (size_t i=0;i<n;i++) ((uint8_t*)d)[i]=((const uint8_t*)s)[i]; return d; }
@@ -30,6 +31,14 @@ static uint32_t net_dns_tx, net_dns_rx;
 
 static void dbg(const char *s) { serial_puts("[net] "); serial_puts(s); }
 static int net_tcp_dispatch_frame(const void *frame, size_t len);
+
+static void net_poll_backoff(void) {
+    if (current_task) {
+        task_yield();
+        return;
+    }
+    for (volatile int j = 0; j < 50000; j++) {}
+}
 
 /* --- helpers --- */
 static uint16_t bswap16(uint16_t v) { return (v << 8) | (v >> 8); }
@@ -202,7 +211,7 @@ static int arp_resolve(uint32_t ip, uint8_t *mac_out) {
     for (int tries = 0; tries < 50; tries++) {
         uint8_t rbuf[64];
         size_t n = dev_recv(rbuf, sizeof(rbuf));
-        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
+        if (n == 0) { net_poll_backoff(); continue; }
         if (n >= 42) {
             struct eth_frame *re = (struct eth_frame *)rbuf;
             if (bswap16(re->ethertype) == 0x0806) {
@@ -270,7 +279,7 @@ int net_ping(uint32_t ip) {
     for (int tries = 0; tries < 50; tries++) {
         uint8_t rbuf[1514];
         size_t n = dev_recv(rbuf, sizeof(rbuf));
-        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
+        if (n == 0) { net_poll_backoff(); continue; }
         dbg("ping recv loop got packet\n");
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr)) { dbg("too short\n"); continue; }
         struct eth_frame *re = (struct eth_frame *)rbuf;
@@ -327,7 +336,7 @@ int net_icmp_recv_echo(uint32_t src_ip, uint16_t id, uint16_t *seq_out,
     for (int tries = 0; tries < 1000; tries++) {
         uint8_t rbuf[1514];
         size_t n = dev_recv(rbuf, sizeof(rbuf));
-        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
+        if (n == 0) { net_poll_backoff(); continue; }
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct icmp_echo))
             continue;
         struct eth_frame *eth = (struct eth_frame *)rbuf;
@@ -423,7 +432,7 @@ int net_udp_recv(uint16_t local_port, uint32_t *src_ip, uint16_t *src_port,
     for (int tries = 0; tries < 2000; tries++) {
         uint8_t rbuf[1514];
         size_t n = dev_recv(rbuf, sizeof(rbuf));
-        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
+        if (n == 0) { net_poll_backoff(); continue; }
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct udp_hdr))
             continue;
         struct eth_frame *eth = (struct eth_frame *)rbuf;
@@ -505,7 +514,7 @@ int net_dns_resolve(const char *hostname, uint32_t *ip_out) {
     for (int tries = 0; tries < 200; tries++) {
         uint8_t rbuf[1514];
         size_t n = dev_recv(rbuf, sizeof(rbuf));
-        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
+        if (n == 0) { net_poll_backoff(); continue; }
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr) + sizeof(struct udp_hdr))
             continue;
         struct eth_frame *re = (struct eth_frame *)rbuf;
@@ -804,7 +813,7 @@ int net_tcp_connect_pcb(struct net_tcp_pcb *pcb, uint32_t ip, uint16_t port) {
             return 0;
         if (pcb->rx_reset)
             return -1;
-        for (volatile int j = 0; j < 50000; j++) {}
+        net_poll_backoff();
     }
     net_tcp_mark_closed(pcb);
     dbg("tcp: connect timeout\n");
@@ -864,7 +873,7 @@ int net_tcp_recv_pcb(struct net_tcp_pcb *pcb, void *buf, size_t max) {
         }
         if (pcb->state == TCP_STATE_CLOSED || pcb->rx_closed)
             return 0;
-        for (volatile int j = 0; j < 50000; j++) {}
+        net_poll_backoff();
     }
     dbg("tcp: recv timeout\n");
     return -1;
@@ -1043,7 +1052,7 @@ static uint32_t dhcp_recv(uint8_t expect_type, uint32_t xid) {
     for (int tries = 0; tries < 300; tries++) {
         uint8_t rbuf[1514];
         size_t n = dev_recv(rbuf, sizeof(rbuf));
-        if (n == 0) { for (volatile int j = 0; j < 50000; j++) {} continue; }
+        if (n == 0) { net_poll_backoff(); continue; }
         if (n < sizeof(struct eth_frame) + sizeof(struct ip_hdr)
                + sizeof(struct udp_hdr) + 240)
             continue;

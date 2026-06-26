@@ -91,6 +91,8 @@ def generate(apps):
     print("#ifndef BUZZOS_APP_REGISTRY_H")
     print("#define BUZZOS_APP_REGISTRY_H")
     print("")
+    print("#include <stddef.h>")
+    print("")
     print("struct app_seed_entry {")
     print("    const char *path;")
     print("    const void *data;")
