@@ -1117,18 +1117,7 @@ static void render(void) {
     fb_blit(0, 0, sw, sh, fb);
 }
 
-static int hit_window_title(int x, int y) {
-    for (int zi = WIN_COUNT - 1; zi >= 0; zi--) {
-        int i = z_order[zi];
-        struct rect r = windows[i].r;
-        struct rect title = {r.x, r.y, r.w, 30};
-        if (windows[i].visible && inside(x, y, title))
-            return i;
-    }
-    return -1;
-}
-
-static int hit_window(int x, int y) {
+static int top_window_at(int x, int y) {
     for (int zi = WIN_COUNT - 1; zi >= 0; zi--) {
         int i = z_order[zi];
         if (windows[i].visible && !windows[i].minimized && inside(x, y, windows[i].r))
@@ -1137,23 +1126,34 @@ static int hit_window(int x, int y) {
     return -1;
 }
 
+static int hit_window_title(int x, int y) {
+    int i = top_window_at(x, y);
+    if (i < 0)
+        return -1;
+    struct rect r = windows[i].r;
+    struct rect title = {r.x, r.y, r.w, 30};
+    return inside(x, y, title) ? i : -1;
+}
+
+static int hit_window(int x, int y) {
+    return top_window_at(x, y);
+}
+
 static int hit_control(int x, int y, int *control_out) {
-    for (int zi = WIN_COUNT - 1; zi >= 0; zi--) {
-        int i = z_order[zi];
-        if (!windows[i].visible || windows[i].minimized)
-            continue;
-        if (inside(x, y, close_rect(i))) {
-            *control_out = 2;
-            return i;
-        }
-        if (inside(x, y, max_rect(i))) {
-            *control_out = 1;
-            return i;
-        }
-        if (inside(x, y, min_rect(i))) {
-            *control_out = 0;
-            return i;
-        }
+    int i = top_window_at(x, y);
+    if (i < 0)
+        return -1;
+    if (inside(x, y, close_rect(i))) {
+        *control_out = 2;
+        return i;
+    }
+    if (inside(x, y, max_rect(i))) {
+        *control_out = 1;
+        return i;
+    }
+    if (inside(x, y, min_rect(i))) {
+        *control_out = 0;
+        return i;
     }
     return -1;
 }
@@ -1161,22 +1161,36 @@ static int hit_control(int x, int y, int *control_out) {
 static int hit_resize(int x, int y, int *edges_out) {
     for (int zi = WIN_COUNT - 1; zi >= 0; zi--) {
         int i = z_order[zi];
-        if (!windows[i].visible || windows[i].minimized || windows[i].maximized)
+        if (!windows[i].visible || windows[i].minimized)
             continue;
         struct rect r = windows[i].r;
-        int edge_pad = RESIZE_PAD + 6;
+        int side_pad = RESIZE_PAD + 2;
+        int top_pad = 4;
+        int bottom_pad = RESIZE_PAD + 6;
         int corner_pad = 24;
-        if (x < r.x - edge_pad || y < r.y - edge_pad ||
-            x >= r.x + r.w + edge_pad || y >= r.y + r.h + edge_pad)
+        int covered = inside(x, y, r);
+        int in_title = covered && y >= r.y && y < r.y + 30;
+        if (windows[i].maximized) {
+            if (covered)
+                return -1;
             continue;
+        }
+        if (x < r.x - side_pad || y < r.y - top_pad ||
+            x >= r.x + r.w + side_pad || y >= r.y + r.h + bottom_pad) {
+            if (covered)
+                return -1;
+            continue;
+        }
+        if (in_title && y >= r.y + top_pad)
+            return -1;
         int edges = 0;
-        if (x < r.x + edge_pad)
+        if (x < r.x + side_pad)
             edges |= 1;
-        if (x >= r.x + r.w - edge_pad)
+        if (x >= r.x + r.w - side_pad)
             edges |= 2;
-        if (y < r.y + edge_pad)
+        if (y < r.y + top_pad)
             edges |= 4;
-        if (y >= r.y + r.h - edge_pad)
+        if (y >= r.y + r.h - bottom_pad)
             edges |= 8;
         if (x >= r.x + r.w - corner_pad && y >= r.y + r.h - corner_pad)
             edges |= 2 | 8;
@@ -1184,6 +1198,8 @@ static int hit_resize(int x, int y, int *edges_out) {
             *edges_out = edges;
             return i;
         }
+        if (covered)
+            return -1;
     }
     return -1;
 }
@@ -1306,18 +1322,16 @@ static void toggle_maximize(int id) {
 }
 
 static int hit_scrollbar(int x, int y, int *axis_out) {
-    for (int zi = WIN_COUNT - 1; zi >= 0; zi--) {
-        int i = z_order[zi];
-        if (!windows[i].visible || windows[i].minimized)
-            continue;
-        if (inside(x, y, vscroll_track(i)) && max_scroll_y(i) > 0) {
-            *axis_out = 1;
-            return i;
-        }
-        if (inside(x, y, hscroll_track(i)) && max_scroll_x(i) > 0) {
-            *axis_out = 0;
-            return i;
-        }
+    int i = top_window_at(x, y);
+    if (i < 0)
+        return -1;
+    if (inside(x, y, vscroll_track(i)) && max_scroll_y(i) > 0) {
+        *axis_out = 1;
+        return i;
+    }
+    if (inside(x, y, hscroll_track(i)) && max_scroll_x(i) > 0) {
+        *axis_out = 0;
+        return i;
     }
     return -1;
 }

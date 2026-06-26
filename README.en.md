@@ -8,12 +8,12 @@ Related documentation: [CHANGELOG.md](CHANGELOG.md), [Local Boot Guide](docs/boo
 
 <table>
   <tr>
-    <td><img src="/pic/demo1.png" alt="BuzzOS demo 1"></td>
-    <td><img src="/pic/demo2.png" alt="BuzzOS demo 2"></td>
+    <td><img src="/pic/demo1.png" alt="BuzzOS demo 1" width="480"></td>
+    <td><img src="/pic/demo2.png" alt="BuzzOS demo 2" width="480"></td>
   </tr>
   <tr>
-    <td><img src="/pic/demo3.png" alt="BuzzOS demo 3"></td>
-    <td><img src="/pic/demo4.png" alt="BuzzOS demo 4"></td>
+    <td><img src="/pic/demo3.png" alt="BuzzOS demo 3" width="480"></td>
+    <td><img src="/pic/demo4.png" alt="BuzzOS demo 4" width="480"></td>
   </tr>
 </table>
 
