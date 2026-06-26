@@ -222,6 +222,40 @@ static int starts_with(const char *s, const char *prefix) {
     return 1;
 }
 
+static void shell_log(const char *s);
+
+static int view_from_name(const char *name, int *view_out) {
+    if (!name || !name[0] || streq(name, "apps") ||
+        streq(name, "manager") || streq(name, "appmgr")) {
+        *view_out = APP_MANAGER;
+        return 0;
+    }
+    if (streq(name, "paint")) {
+        *view_out = APP_PAINT;
+        return 0;
+    }
+    if (streq(name, "shell") || streq(name, "guishell")) {
+        *view_out = APP_SHELL;
+        return 0;
+    }
+    if (streq(name, "help") || streq(name, "guihelp")) {
+        *view_out = APP_HELP;
+        return 0;
+    }
+    return -1;
+}
+
+static void select_start_view(int argc, char **argv) {
+    int view;
+    if (argc <= 1)
+        return;
+    if (view_from_name(argv[1], &view) == 0) {
+        active_app = view;
+        return;
+    }
+    shell_log("GUI VIEW: APPS PAINT SHELL HELP");
+}
+
 static const char *skip_spaces(const char *s) {
     while (*s == ' ' || *s == '\t')
         s++;
@@ -779,7 +813,7 @@ static void shell_print_help_topic(const char *topic) {
     if (!topic[0]) {
         shell_log("HELP TOPICS: APPS GUI FILES");
         shell_log("PROC EDIT  TRY ABOUT");
-        shell_log("RUN: GUIDEMO NOTES FORMS CALC");
+        shell_log("RUN: PAINT APPMGR GUIDEMO");
         shell_log("CMDS: ABOUT HEALTH LIMITS FSINFO");
         return;
     }
@@ -793,6 +827,7 @@ static void shell_print_help_topic(const char *topic) {
     if (streq(topic, "gui")) {
         shell_log("MANAGER: 1 PAINT 2 SHELL");
         shell_log("3 HELP 4/ENTER RUN APP");
+        shell_log("CMDS: PAINT APPMGR GUIHELP");
         shell_log("ESC BACK, CTRL-C EXIT");
         shell_log("TEXTBOXES USE CLICK/TAB");
         return;
@@ -892,6 +927,15 @@ static void shell_execute(void) {
     } else if (streq(cmd, "clear")) {
         for (int i = 0; i < SHELL_LINES; i++)
             shell_lines[i][0] = 0;
+    } else if (streq(cmd, "appmgr") || streq(cmd, "manager")) {
+        active_app = APP_MANAGER;
+        scan_apps();
+    } else if (streq(cmd, "paint")) {
+        active_app = APP_PAINT;
+    } else if (streq(cmd, "guishell")) {
+        active_app = APP_SHELL;
+    } else if (streq(cmd, "guihelp")) {
+        active_app = APP_HELP;
     } else if (streq(cmd, "apps")) {
         shell_list_apps();
     } else if (streq(cmd, "pwd")) {
@@ -1687,15 +1731,13 @@ static void init_state(void) {
 }
 
 int main(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
-
     if (gfx_mode(1) < 0) {
         puts("gui: graphics mode failed");
         return 1;
     }
 
     init_state();
+    select_start_view(argc, argv);
     while (running) {
         int key;
         while ((key = read_key_poll()) >= 0)

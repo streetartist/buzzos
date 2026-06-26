@@ -53,12 +53,21 @@ ui_panel
 ui_button
 ui_field
 ui_textbox
+ui_list_row
+ui_scrollbar
+ui_scroll_select_delta
+ui_mouse_wheel_delta
 ui_pointer
 ```
 
 New small GUI apps should use these shared helpers for top bars, panels,
-buttons, text boxes, focus/hover borders, pointer drawing, and status colors.
-App-specific layout and behavior still live in each app source file.
+buttons, text boxes, focus/hover borders, selected list rows, scrollbars,
+mouse-wheel list navigation, pointer drawing, and status colors. App-specific
+layout and behavior still live in each app source file.
+
+`make new-app APP=name` generates a small style-based app scaffold that already
+contains a scrollable highlighted list, mouse-wheel handling, a textbox, and
+save/load buttons.
 
 ## Run It
 

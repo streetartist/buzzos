@@ -34,7 +34,7 @@ the local verification report at `build/project-report.md`.
 - User-space `nano` editor and small `basm` assembler for editing, assembling, and running simple assembly programs inside BuzzOS.
 - User-space `gui` desktop using framebuffer blits, PS/2 mouse input, and graphics syscalls. It includes Paint, a built-in shell panel, and a `/fs/apps` GUI app launcher.
 - Seeded user GUI apps in `/fs/apps`: `guidemo` with a single-line textbox, `notes` with multiline editing, `forms` with multiple focused text boxes, and `calc` with two focused input boxes, saved state, and `.app` manifest metadata in the App Manager.
-- Seeded user GUI apps share `src/user/libc/gui_style.h` for one unified UI style: shared top bars, panels, buttons, text boxes, pointer drawing, and status colors.
+- Seeded user GUI apps share `src/user/libc/gui_style.h` for one unified UI style: shared top bars, panels, buttons, text boxes, list highlighting, scrollbars, mouse-wheel state, pointer drawing, and status colors.
 - Preemptive scheduling, process/thread model, `spawn`, `join`, `sleep`, `waitpid`, and `kill`.
 - Syscall ABI for files, processes, directories, networking, IPC, and synchronization.
 - VFS with a mount table:

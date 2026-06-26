@@ -35,8 +35,9 @@ short log for reviewers and contributors; deeper design notes live under
   with `.app` manifests, readmes, optional seed files, and generated kernel
   seed data.
 - Unified seeded user GUI app styling through `src/user/libc/gui_style.h`,
-  sharing top bars, panels, buttons, text boxes, pointer drawing, and status
-  colors across `guidemo`, `notes`, `forms`, and `calc`.
+  sharing top bars, panels, buttons, text boxes, list highlighting,
+  scrollbars, mouse-wheel state, pointer drawing, and status colors across
+  `guidemo`, `notes`, `forms`, and `calc`.
 
 ### Kernel And Runtime
 

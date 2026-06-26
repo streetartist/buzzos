@@ -34,6 +34,17 @@ enum {
     UI_OK = 10,
 };
 
+struct ui_scroll {
+    int first;
+    int selected;
+    int last_wheel;
+    uint32_t last_wheel_seq;
+};
+
+static inline int ui_inside(int x, int y, int rx, int ry, int rw, int rh) {
+    return x >= rx && y >= ry && x < rx + rw && y < ry + rh;
+}
+
 static inline void ui_border(int x, int y, int w, int h, int light, int dark) {
     gfx_fill_rect(x, y, w, 1, light);
     gfx_fill_rect(x, y, 1, h, light);
@@ -50,6 +61,87 @@ static inline void ui_text_clip(int x, int y, const char *s, int chars, int fg, 
     }
     tmp[i] = 0;
     gfx_text(x, y, tmp, fg, bg);
+}
+
+static inline int ui_visible_rows(int h, int row_h) {
+    if (h <= 0 || row_h <= 0)
+        return 0;
+    return h / row_h;
+}
+
+static inline int ui_scroll_max(int total, int visible) {
+    int max_first = total - visible;
+    return max_first > 0 ? max_first : 0;
+}
+
+static inline void ui_scroll_clamp(struct ui_scroll *scroll,
+                                   int total, int visible) {
+    int max_first = ui_scroll_max(total, visible);
+    if (!scroll)
+        return;
+    if (scroll->selected < 0)
+        scroll->selected = 0;
+    if (total > 0 && scroll->selected >= total)
+        scroll->selected = total - 1;
+    if (total <= 0)
+        scroll->selected = 0;
+    if (scroll->first < 0)
+        scroll->first = 0;
+    if (scroll->first > max_first)
+        scroll->first = max_first;
+}
+
+static inline void ui_scroll_reveal(struct ui_scroll *scroll,
+                                    int total, int visible) {
+    if (!scroll || visible <= 0)
+        return;
+    if (scroll->selected < scroll->first)
+        scroll->first = scroll->selected;
+    if (scroll->selected >= scroll->first + visible)
+        scroll->first = scroll->selected - visible + 1;
+    ui_scroll_clamp(scroll, total, visible);
+}
+
+static inline void ui_scroll_select(struct ui_scroll *scroll, int selected,
+                                    int total, int visible) {
+    if (!scroll)
+        return;
+    scroll->selected = selected;
+    ui_scroll_reveal(scroll, total, visible);
+}
+
+static inline void ui_scroll_select_delta(struct ui_scroll *scroll, int delta,
+                                          int total, int visible) {
+    if (!scroll)
+        return;
+    ui_scroll_select(scroll, scroll->selected + delta, total, visible);
+}
+
+static inline int ui_mouse_wheel_delta(const struct mouse_state *m,
+                                       struct ui_scroll *scroll) {
+    int delta;
+    if (!m || !scroll || m->wheel_seq == scroll->last_wheel_seq)
+        return 0;
+    if (scroll->last_wheel_seq == 0 && m->wheel_seq > 1) {
+        scroll->last_wheel = m->wheel;
+        scroll->last_wheel_seq = m->wheel_seq;
+        return 0;
+    }
+    delta = m->wheel - scroll->last_wheel;
+    scroll->last_wheel = m->wheel;
+    scroll->last_wheel_seq = m->wheel_seq;
+    return delta;
+}
+
+static inline int ui_wheel_to_rows(int wheel_delta) {
+    int rows = -wheel_delta;
+    if (wheel_delta == 0)
+        return 0;
+    if (rows > 8)
+        rows = 8;
+    if (rows < -8)
+        rows = -8;
+    return rows;
 }
 
 static inline void ui_topbar(const char *title, int exit_hot) {
@@ -76,6 +168,40 @@ static inline void ui_button(int x, int y, int w, int h,
     gfx_fill_rect(x, y, w, h, fill);
     ui_border(x, y, w, h, hot ? UI_HOT : UI_TEXT_INV, active ? 0 : UI_SHADOW);
     gfx_text(x + 6, y + (h - 7) / 2, label, fg, -1);
+}
+
+static inline void ui_list_row(int x, int y, int w, int h,
+                               const char *label, int hot, int selected) {
+    int fill = selected ? UI_ACCENT : (hot ? UI_FIELD : UI_PANEL);
+    int fg = selected ? UI_TEXT_INV : UI_TEXT;
+    int chars = (w - 12) / 6;
+    if (chars < 1)
+        chars = 1;
+    gfx_fill_rect(x, y, w, h, fill);
+    ui_border(x, y, w, h, selected ? UI_HOT : UI_TEXT_INV,
+              selected ? 0 : UI_SHADOW);
+    ui_text_clip(x + 6, y + (h - 7) / 2, label, chars, fg, -1);
+}
+
+static inline void ui_scrollbar(int x, int y, int h,
+                                int total, int visible, int first) {
+    int thumb_h;
+    int thumb_y;
+    int max_first = ui_scroll_max(total, visible);
+    if (total <= visible || h <= 0 || max_first <= 0)
+        return;
+    if (first < 0)
+        first = 0;
+    if (first > max_first)
+        first = max_first;
+    gfx_fill_rect(x, y, 3, h, UI_TEXT_DIM);
+    thumb_h = (h * visible) / total;
+    if (thumb_h < 8)
+        thumb_h = 8;
+    if (thumb_h > h)
+        thumb_h = h;
+    thumb_y = y + ((h - thumb_h) * first) / max_first;
+    gfx_fill_rect(x, thumb_y, 3, thumb_h, UI_TEXT);
 }
 
 static inline void ui_field(int x, int y, int w, int h, int hot, int active) {

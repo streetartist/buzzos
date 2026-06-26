@@ -1166,6 +1166,7 @@ def check_app_manifests(list_only=False):
 def check_gui_style():
     makefile = read_text("Makefile")
     style_h = read_text("src/user/libc/gui_style.h")
+    new_app_py = read_text("tools/new_app.py")
     report_py = read_text("tools/project_report.py")
     readme = read_text("README.md")
     readme_en = read_text("README.en.md")
@@ -1189,6 +1190,10 @@ def check_gui_style():
         "ui_button",
         "ui_field",
         "ui_textbox",
+        "ui_list_row",
+        "ui_scrollbar",
+        "ui_scroll_select_delta",
+        "ui_mouse_wheel_delta",
         "ui_pointer",
     ]:
         if snippet not in style_h:
@@ -1209,12 +1214,16 @@ def check_gui_style():
         if snippet not in report_py:
             fail(f"project report is missing GUI style summary: {snippet}")
 
-    for snippet in ["gui_style.h", "统一", "shared"]:
+    for snippet in ['#include "gui_style.h"', "ui_list_row", "ui_scrollbar", "ui_mouse_wheel_delta"]:
+        if snippet not in new_app_py:
+            fail(f"new app scaffold is missing shared GUI feature: {snippet}")
+
+    for snippet in ["gui_style.h", "统一", "shared", "ui_scrollbar"]:
         docs = readme + "\n" + readme_en + "\n" + user_gui + "\n" + project_status + "\n" + work_items + "\n" + changelog
         if snippet not in docs:
             fail(f"docs/logs are missing GUI style note: {snippet}")
 
-    ok("GUI style: seeded GUI apps share gui_style.h helpers for topbar, panels, buttons, fields, and pointer")
+    ok("GUI style: seeded GUI apps and new app scaffolds share helpers for controls, highlight rows, scrollbars, wheel state, and pointer")
 
 
 def main():

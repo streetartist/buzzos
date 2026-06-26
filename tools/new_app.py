@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 C_TEMPLATE = Template(r'''#include "libc.h"
+#include "gui_style.h"
 
 #define APP_TITLE "$upper"
 #define STATE_PATH "/fs/apps/$name.cfg"
@@ -15,24 +16,90 @@ C_TEMPLATE = Template(r'''#include "libc.h"
 enum {
     KEY_ESC = 0x1B,
     CTRL_C = 0x03,
-    SW = 320,
-    SH = 200,
-    INPUT_MAX = 36,
+    CTRL_S = 0x13,
+    KEY_UP = 256,
+    KEY_DOWN,
+    KEY_DELETE,
+
+    INPUT_MAX = 34,
+    LIST_X = 16,
+    LIST_Y = 48,
+    LIST_W = 112,
+    LIST_H = 84,
+    ROW_H = 14,
+
+    FIELD_X = 144,
+    FIELD_Y = 74,
+    FIELD_W = 150,
+    FIELD_H = 20,
+
+    SAVE_X = 144,
+    LOAD_X = 196,
+    CLEAR_X = 248,
+    BTN_Y = 128,
+    BTN_W = 46,
+    BTN_H = 14,
+};
+
+static const char *items[] = {
+    "OVERVIEW",
+    "TEXTBOX",
+    "SCROLLBAR",
+    "HIGHLIGHT",
+    "MOUSE WHEEL",
+    "PERSISTENCE",
+    "FILES",
+    "STATUS",
 };
 
 static int running = 1;
-static int pointer_x = SW / 2;
-static int pointer_y = SH / 2;
+static int pointer_x = UI_SW / 2;
+static int pointer_y = UI_SH / 2;
 static int prev_left;
 static int focused = 1;
 static int dirty;
 static int saved_flash;
 static unsigned int frame;
-static uint32_t last_mouse_seq;
+static struct ui_scroll list_scroll;
 static char text[INPUT_MAX + 1] = "$upper";
 
-static int inside(int x, int y, int rx, int ry, int rw, int rh) {
-    return x >= rx && y >= ry && x < rx + rw && y < ry + rh;
+static int item_count(void) {
+    return (int)(sizeof(items) / sizeof(items[0]));
+}
+
+static int list_visible_rows(void) {
+    return ui_visible_rows(LIST_H, ROW_H);
+}
+
+static void append_char(char *dst, char ch, int cap) {
+    int n = (int)strlen(dst);
+    if (n < cap - 1) {
+        dst[n++] = ch;
+        dst[n] = 0;
+    }
+}
+
+static void append_text(char *dst, const char *src, int cap) {
+    int n = (int)strlen(dst);
+    int i = 0;
+    while (src && src[i] && n < cap - 1)
+        dst[n++] = src[i++];
+    dst[n] = 0;
+}
+
+static void append_uint(char *dst, unsigned int v, int cap) {
+    char tmp[12];
+    int n = 0;
+    if (v == 0) {
+        append_char(dst, '0', cap);
+        return;
+    }
+    while (v && n < (int)sizeof(tmp)) {
+        tmp[n++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (n > 0)
+        append_char(dst, tmp[--n], cap);
 }
 
 static void set_text(const char *s) {
@@ -74,100 +141,190 @@ static void load_state(void) {
     dirty = 0;
 }
 
-static void button(int x, int y, int w, const char *label, int hot) {
-    int fill = hot ? 30 : 24;
-    gfx_fill_rect(x, y, w, 16, fill);
-    gfx_fill_rect(x, y, w, 1, 63);
-    gfx_fill_rect(x, y + 15, w, 1, 8);
-    gfx_text(x + 8, y + 5, label, 15, fill);
+static int read_byte_poll(void) {
+    unsigned char c;
+    int n = read(0, &c, 1);
+    if (n > 0)
+        return c;
+    return -1;
 }
 
-static void draw(void) {
-    int over_save = inside(pointer_x, pointer_y, 22, 142, 54, 16);
-    int over_load = inside(pointer_x, pointer_y, 84, 142, 54, 16);
-    int over_clear = inside(pointer_x, pointer_y, 146, 142, 60, 16);
-    int over_exit = inside(pointer_x, pointer_y, 266, 8, 42, 16);
-    int cursor_on = focused && ((frame / 24) & 1);
+static int read_key_poll(void) {
+    int c = read_byte_poll();
+    if (c != KEY_ESC)
+        return c;
 
-    gfx_clear(17);
-    gfx_fill_rect(0, 0, SW, 24, 21);
-    gfx_text(12, 9, APP_TITLE, 15, 21);
-    button(266, 8, 42, "EXIT", over_exit);
+    int b = read_byte_poll();
+    if (b < 0 || b != '[')
+        return KEY_ESC;
 
-    gfx_text(22, 44, "Generated BuzzOS GUI app", 15, 17);
-    gfx_text(22, 62, "Text field:", 12, 17);
-    gfx_fill_rect(22, 78, 276, 24, focused ? 63 : 8);
-    gfx_fill_rect(23, 79, 274, 22, 0);
-    gfx_text(28, 86, text, 15, 0);
-    if (cursor_on) {
-        int x = 28 + (int)strlen(text) * 8;
-        if (x > 290)
-            x = 290;
-        gfx_fill_rect(x, 84, 1, 12, 15);
-    }
-
-    gfx_text(22, 116, dirty ? "State: unsaved" : "State: clean", dirty ? 14 : 10, 17);
-    if (saved_flash > 0)
-        gfx_text(142, 116, "saved", 10, 17);
-
-    button(22, 142, 54, "SAVE", over_save);
-    button(84, 142, 54, "LOAD", over_load);
-    button(146, 142, 60, "CLEAR", over_clear);
-
-    gfx_fill_rect(pointer_x, pointer_y, 6, 1, 15);
-    gfx_fill_rect(pointer_x, pointer_y, 1, 6, 15);
+    int k = read_byte_poll();
+    if (k == 'A')
+        return KEY_UP;
+    if (k == 'B')
+        return KEY_DOWN;
+    if (k == '3' && read_byte_poll() == '~')
+        return KEY_DELETE;
+    return KEY_ESC;
 }
 
-static void handle_key(char ch) {
+static void handle_key(int key) {
     int len;
-    if (ch == KEY_ESC || ch == CTRL_C) {
+    if (key == KEY_ESC || key == CTRL_C) {
         running = 0;
+        return;
+    }
+    if (key == CTRL_S) {
+        save_state();
+        return;
+    }
+    if (key == KEY_UP || key == KEY_DOWN) {
+        ui_scroll_select_delta(&list_scroll, key == KEY_UP ? -1 : 1,
+                               item_count(), list_visible_rows());
+        return;
+    }
+    if (key == '\t') {
+        focused = !focused;
         return;
     }
     if (!focused)
         return;
+
     len = (int)strlen(text);
-    if (ch == '\r' || ch == '\n') {
+    if (key == '\r' || key == '\n') {
         save_state();
-    } else if (ch == '\b' || ch == 127) {
+    } else if (key == '\b' || key == 127) {
         if (len > 0) {
             text[len - 1] = 0;
             mark_dirty();
         }
-    } else if (ch >= 32 && ch <= 126 && len < INPUT_MAX) {
-        text[len] = ch;
+    } else if (key == KEY_DELETE) {
+        set_text("");
+        mark_dirty();
+    } else if (key >= 32 && key <= 126 && len < INPUT_MAX) {
+        text[len] = (char)key;
         text[len + 1] = 0;
         mark_dirty();
     }
 }
 
+static void click_at(int x, int y) {
+    if (ui_inside(x, y, UI_EXIT_X, UI_EXIT_Y, UI_EXIT_W, UI_EXIT_H)) {
+        running = 0;
+        return;
+    }
+    if (ui_inside(x, y, FIELD_X, FIELD_Y, FIELD_W, FIELD_H)) {
+        focused = 1;
+        return;
+    }
+    if (ui_inside(x, y, LIST_X, LIST_Y, LIST_W, LIST_H)) {
+        int row = (y - LIST_Y) / ROW_H;
+        int selected = list_scroll.first + row;
+        if (selected >= 0 && selected < item_count())
+            ui_scroll_select(&list_scroll, selected, item_count(), list_visible_rows());
+        focused = 0;
+        return;
+    }
+    if (ui_inside(x, y, SAVE_X, BTN_Y, BTN_W, BTN_H)) {
+        save_state();
+        return;
+    }
+    if (ui_inside(x, y, LOAD_X, BTN_Y, BTN_W, BTN_H)) {
+        load_state();
+        return;
+    }
+    if (ui_inside(x, y, CLEAR_X, BTN_Y, BTN_W, BTN_H)) {
+        set_text("");
+        mark_dirty();
+        focused = 1;
+    }
+}
+
 static void handle_mouse(void) {
     struct mouse_state ms;
-    if (mouse_get(&ms) < 0 || ms.seq == last_mouse_seq)
+    int wheel;
+    int left;
+    if (mouse_get(&ms) < 0)
         return;
-    last_mouse_seq = ms.seq;
+
     pointer_x = ms.x;
     pointer_y = ms.y;
-    if (pointer_x < 0) pointer_x = 0;
-    if (pointer_y < 0) pointer_y = 0;
-    if (pointer_x >= SW) pointer_x = SW - 1;
-    if (pointer_y >= SH) pointer_y = SH - 1;
 
-    int left = ms.buttons & 1;
-    if (left && !prev_left) {
-        focused = inside(pointer_x, pointer_y, 22, 78, 276, 24);
-        if (inside(pointer_x, pointer_y, 22, 142, 54, 16))
-            save_state();
-        else if (inside(pointer_x, pointer_y, 84, 142, 54, 16))
-            load_state();
-        else if (inside(pointer_x, pointer_y, 146, 142, 60, 16)) {
-            set_text("");
-            mark_dirty();
-            focused = 1;
-        } else if (inside(pointer_x, pointer_y, 266, 8, 42, 16))
-            running = 0;
+    wheel = ui_mouse_wheel_delta(&ms, &list_scroll);
+    if (wheel && ui_inside(pointer_x, pointer_y, LIST_X, LIST_Y, LIST_W, LIST_H)) {
+        ui_scroll_select_delta(&list_scroll, ui_wheel_to_rows(wheel),
+                               item_count(), list_visible_rows());
     }
+
+    left = ms.buttons & 1;
+    if (left && !prev_left)
+        click_at(pointer_x, pointer_y);
     prev_left = left;
+}
+
+static void draw_list(void) {
+    int visible = list_visible_rows();
+    gfx_text(LIST_X, LIST_Y - 12, "FEATURES", UI_TEXT, -1);
+    for (int row = 0; row < visible; row++) {
+        int index = list_scroll.first + row;
+        int y = LIST_Y + row * ROW_H;
+        if (index >= item_count())
+            break;
+        ui_list_row(LIST_X, y, LIST_W - 6, ROW_H - 2, items[index],
+                    ui_inside(pointer_x, pointer_y, LIST_X, y, LIST_W - 6, ROW_H - 2),
+                    index == list_scroll.selected);
+    }
+    ui_scrollbar(LIST_X + LIST_W - 4, LIST_Y, LIST_H,
+                 item_count(), visible, list_scroll.first);
+}
+
+static void draw_detail(void) {
+    char line[48];
+    ui_panel(138, 42, 166, 78, "DETAIL", UI_ACCENT_ALT);
+    ui_text_clip(146, 60, items[list_scroll.selected], 23, UI_TEXT, -1);
+    line[0] = 0;
+    append_text(line, "ROW ", sizeof(line));
+    append_uint(line, (unsigned int)(list_scroll.selected + 1), sizeof(line));
+    append_text(line, " OF ", sizeof(line));
+    append_uint(line, (unsigned int)item_count(), sizeof(line));
+    ui_text_clip(146, 73, line, 23, UI_TEXT_DIM, -1);
+    ui_text_clip(146, 91, "USE WHEEL OR ARROWS", 23, UI_TEXT, -1);
+    ui_text_clip(146, 104, "CLICK ROWS TO SELECT", 23, UI_TEXT, -1);
+}
+
+static void draw_status(void) {
+    char line[64];
+    line[0] = 0;
+    append_text(line, dirty ? "DIRTY " : "CLEAN ", sizeof(line));
+    append_text(line, STATE_PATH, sizeof(line));
+    ui_text_clip(12, 178, line, 49,
+                 saved_flash > 0 ? UI_OK : (dirty ? UI_DANGER : UI_ACCENT),
+                 -1);
+}
+
+static void draw(void) {
+    gfx_clear(UI_BG);
+    ui_topbar(APP_TITLE,
+              ui_inside(pointer_x, pointer_y, UI_EXIT_X, UI_EXIT_Y,
+                        UI_EXIT_W, UI_EXIT_H));
+    ui_panel(6, 18, 308, 176, "USER GUI APP", UI_ACCENT);
+
+    draw_list();
+    draw_detail();
+
+    ui_textbox(FIELD_X, FIELD_Y, FIELD_W, FIELD_H, "TEXT",
+               text, "TYPE HERE", 22,
+               ui_inside(pointer_x, pointer_y, FIELD_X, FIELD_Y, FIELD_W, FIELD_H),
+               focused, (int)strlen(text), frame);
+    ui_button(SAVE_X, BTN_Y, BTN_W, BTN_H, "SAVE",
+              ui_inside(pointer_x, pointer_y, SAVE_X, BTN_Y, BTN_W, BTN_H), 0);
+    ui_button(LOAD_X, BTN_Y, BTN_W, BTN_H, "LOAD",
+              ui_inside(pointer_x, pointer_y, LOAD_X, BTN_Y, BTN_W, BTN_H), 0);
+    ui_button(CLEAR_X, BTN_Y, BTN_W, BTN_H, "CLR",
+              ui_inside(pointer_x, pointer_y, CLEAR_X, BTN_Y, BTN_W, BTN_H), 0);
+
+    draw_status();
+    ui_pointer(pointer_x, pointer_y);
 }
 
 int main(void) {
@@ -177,10 +334,10 @@ int main(void) {
     }
     load_state();
     while (running) {
-        char ch;
+        int key;
         handle_mouse();
-        while (read(0, &ch, 1) == 1)
-            handle_key(ch);
+        while ((key = read_key_poll()) >= 0)
+            handle_key(key);
         draw();
         if (saved_flash > 0)
             saved_flash--;

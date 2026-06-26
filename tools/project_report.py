@@ -211,11 +211,13 @@ def collect_gui_style():
     makefile = read_text_if_exists("Makefile")
     apps = parse_make_words(makefile, "GUI_APP_NAMES")
     header = read_text_if_exists("src/user/libc/gui_style.h")
+    helpers = ["ui_topbar", "ui_panel", "ui_button", "ui_textbox",
+               "ui_list_row", "ui_scrollbar", "ui_pointer"]
     rows = [{
         "item": "src/user/libc/gui_style.h",
         "status": "present" if header else "missing",
-        "evidence": "ui_topbar/ui_panel/ui_button/ui_textbox/ui_pointer"
-                    if all(name in header for name in ["ui_topbar", "ui_panel", "ui_button", "ui_textbox", "ui_pointer"])
+        "evidence": "/".join(helpers)
+                    if all(name in header for name in helpers)
                     else "incomplete",
     }]
     for app in apps:
@@ -223,7 +225,7 @@ def collect_gui_style():
         rows.append({
             "item": app,
             "status": "yes" if '#include "gui_style.h"' in source else "no",
-            "evidence": ",".join(name for name in ["ui_topbar", "ui_panel", "ui_button", "ui_textbox", "ui_pointer"] if name in source) or "-",
+            "evidence": ",".join(name for name in helpers if name in source) or "-",
         })
     return rows
 
