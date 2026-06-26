@@ -4,6 +4,12 @@
 #include "netdev.h"
 #include "serial.h"
 #include "task.h"
+#include "timer.h"
+
+enum {
+    NET_TCP_CONNECT_TIMEOUT_MS = 5000,
+    NET_TCP_RECV_TIMEOUT_MS = 15000,
+};
 
 static void *memset(void *d, int c, size_t n) { for (size_t i=0;i<n;i++) ((uint8_t*)d)[i]=(uint8_t)c; return d; }
 static void *memcpy(void *d, const void *s, size_t n) { for (size_t i=0;i<n;i++) ((uint8_t*)d)[i]=((const uint8_t*)s)[i]; return d; }
@@ -31,6 +37,25 @@ static uint32_t net_dns_tx, net_dns_rx;
 
 static void dbg(const char *s) { serial_puts("[net] "); serial_puts(s); }
 static int net_tcp_dispatch_frame(const void *frame, size_t len);
+
+static uint32_t net_ms_to_ticks(uint32_t ms) {
+    return (ms / 1000u) * TIMER_HZ
+         + ((ms % 1000u) * TIMER_HZ + 999u) / 1000u;
+}
+
+static int net_timer_ready(void) {
+    return current_task && timer_ticks() != 0;
+}
+
+static uint32_t net_deadline_after_ms(uint32_t ms) {
+    uint32_t ticks = net_ms_to_ticks(ms);
+    uint32_t deadline = timer_ticks() + (ticks ? ticks : 1);
+    return deadline ? deadline : 1;
+}
+
+static int net_deadline_expired(uint32_t deadline) {
+    return deadline && (int32_t)(timer_ticks() - deadline) >= 0;
+}
 
 static void net_poll_backoff(void) {
     if (current_task) {
@@ -806,13 +831,23 @@ int net_tcp_connect_pcb(struct net_tcp_pcb *pcb, uint32_t ip, uint16_t port) {
     }
     dbg("tcp: syn sent\n");
 
-    /* Wait for SYN-ACK */
-    for (int tries = 0; tries < 200; tries++) {
+    /* Wait for SYN-ACK. Once the scheduler timer is running, use real elapsed
+     * time; a pure yield loop can burn through retry counts before WAN replies
+     * have a chance to arrive. */
+    uint32_t deadline = net_timer_ready() ?
+        net_deadline_after_ms(NET_TCP_CONNECT_TIMEOUT_MS) : 0;
+    for (int tries = 0;; tries++) {
         net_tcp_poll_once();
         if (pcb->state == TCP_STATE_ESTABLISHED)
             return 0;
         if (pcb->rx_reset)
             return -1;
+        if (deadline) {
+            if (net_deadline_expired(deadline))
+                break;
+        } else if (tries >= 200) {
+            break;
+        }
         net_poll_backoff();
     }
     net_tcp_mark_closed(pcb);
@@ -862,7 +897,9 @@ int net_tcp_recv_pcb(struct net_tcp_pcb *pcb, void *buf, size_t max) {
     if (pcb->state == TCP_STATE_CLOSED || pcb->rx_closed) return 0;
     if (pcb->state != TCP_STATE_ESTABLISHED) return -1;
 
-    for (int tries = 0; tries < 5000; tries++) {
+    uint32_t deadline = net_timer_ready() ?
+        net_deadline_after_ms(NET_TCP_RECV_TIMEOUT_MS) : 0;
+    for (int tries = 0;; tries++) {
         net_tcp_poll_once();
         queued = net_tcp_take_rx(pcb, buf, max);
         if (queued > 0)
@@ -873,6 +910,12 @@ int net_tcp_recv_pcb(struct net_tcp_pcb *pcb, void *buf, size_t max) {
         }
         if (pcb->state == TCP_STATE_CLOSED || pcb->rx_closed)
             return 0;
+        if (deadline) {
+            if (net_deadline_expired(deadline))
+                break;
+        } else if (tries >= 5000) {
+            break;
+        }
         net_poll_backoff();
     }
     dbg("tcp: recv timeout\n");
