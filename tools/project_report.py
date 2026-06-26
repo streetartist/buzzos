@@ -209,6 +209,26 @@ def collect_health_interfaces():
     ]
 
 
+def collect_runtime_interfaces():
+    procfs = read_text_if_exists("src/kernel/fs/procfs.c")
+    m = re.search(r"static\s+int\s+proc_interfaces_text\(.*?\{(.*?)return\s+pos;", procfs, re.S)
+    if not m:
+        return []
+    rows = []
+    for line in re.findall(r'append_text\(buf,\s*&pos,\s*cap,\s*"([^"]+)\\n"\);', m.group(1)):
+        if line.startswith("NAME "):
+            continue
+        parts = line.split(" ", 2)
+        if len(parts) != 3:
+            continue
+        rows.append({
+            "name": parts[0],
+            "status": parts[1],
+            "entrypoints": parts[2],
+        })
+    return rows
+
+
 def collect_ipc_status():
     vfs_internal = read_text_if_exists("src/kernel/fs/vfs_internal.h")
     smoke = read_text_if_exists("scripts/smoke.ps1")
@@ -358,6 +378,14 @@ def build_report():
 
     lines.append("## Health Interfaces")
     lines.extend(table(["interface", "status", "evidence"], collect_health_interfaces()))
+    lines.append("")
+
+    runtime_interfaces = collect_runtime_interfaces()
+    lines.append("## Runtime Interfaces")
+    if runtime_interfaces:
+        lines.extend(table(["name", "status", "entrypoints"], runtime_interfaces))
+    else:
+        lines.append("No `/proc/interfaces` matrix found.")
     lines.append("")
 
     lines.append("## IPC")

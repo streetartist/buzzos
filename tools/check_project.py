@@ -557,14 +557,18 @@ def check_procfs_diagnostics():
     report_py = read_text("tools/project_report.py")
     smoke_ps1 = read_text("scripts/smoke.ps1")
 
-    for entry in ["health", "tasks", "threads", "meminfo", "net", "sync", "fds", "mounts"]:
+    for entry in ["health", "interfaces", "tasks", "threads", "meminfo", "net", "sync", "fds", "mounts"]:
         if f'{{ "{entry}",' not in procfs:
             fail(f"procfs is missing /proc/{entry}")
 
     for snippet in [
         "PROC_NODE_HEALTH",
+        "PROC_NODE_INTERFACES",
         "proc_health_text",
+        "proc_interfaces_text",
         "interfaces proc shell gui report",
+        "NAME STATUS ENTRYPOINTS",
+        "gui:interfaces,make:report",
         "minifs_info(&fs)",
         "net_ip",
         "PROC_NODE_FDS",
@@ -580,15 +584,25 @@ def check_procfs_diagnostics():
         fail("shell is missing fdstat /proc/fds command")
     if "cmd_health" not in shell_c or 'cmd_cat("/proc/health")' not in shell_c:
         fail("shell is missing health /proc/health command")
+    if "cmd_interfaces" not in shell_c or 'cmd_cat("/proc/interfaces")' not in shell_c:
+        fail("shell is missing interfaces /proc/interfaces command")
     if 'shell_cmd_cat("/proc/health")' not in gui_c or "HEALTH = /PROC/HEALTH" not in gui_c:
         fail("GUI shell is missing health /proc/health command/help")
+    if 'shell_cmd_cat("/proc/interfaces")' not in gui_c or "INTERFACES = /PROC/INTERFACES" not in gui_c:
+        fail("GUI shell is missing interfaces /proc/interfaces command/help")
     if "collect_health_interfaces" not in report_py or "/proc/health" not in report_py:
         fail("project report is missing health interface summary")
+    if "collect_runtime_interfaces" not in report_py or "/proc/interfaces" not in report_py:
+        fail("project report is missing runtime interface summary")
     for snippet in [
         "cat /proc/health",
+        "cat /proc/interfaces",
         "health",
+        "interfaces",
         "status\\s+ok",
         "interfaces\\s+proc\\s+shell\\s+gui\\s+report",
+        "NAME\\s+STATUS\\s+ENTRYPOINTS",
+        "gui:interfaces,make:report",
         "fs_status\\s+ok",
         "cat /proc/fds",
         "fdstat",
@@ -597,7 +611,7 @@ def check_procfs_diagnostics():
         if snippet not in smoke_ps1:
             fail(f"smoke.ps1 is missing procfs diagnostics coverage: {snippet}")
 
-    ok("procfs diagnostics: /proc/health, /proc/fds, health, and fdstat are covered")
+    ok("procfs diagnostics: /proc/health, /proc/interfaces, shell/GUI wrappers, and fdstat are covered")
 
 
 def check_futex_blocking():

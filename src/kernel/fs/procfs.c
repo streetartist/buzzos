@@ -8,6 +8,7 @@
 enum {
     PROC_NODE_DIR = 0,
     PROC_NODE_HEALTH,
+    PROC_NODE_INTERFACES,
     PROC_NODE_TASKS,
     PROC_NODE_THREADS,
     PROC_NODE_MEMINFO,
@@ -24,6 +25,7 @@ struct proc_entry {
 
 static const struct proc_entry proc_entries[] = {
     { "health", PROC_NODE_HEALTH },
+    { "interfaces", PROC_NODE_INTERFACES },
     { "tasks", PROC_NODE_TASKS },
     { "threads", PROC_NODE_THREADS },
     { "meminfo", PROC_NODE_MEMINFO },
@@ -160,6 +162,25 @@ static int proc_health_text(char *buf, int cap) {
     return pos;
 }
 
+static int proc_interfaces_text(char *buf, int cap) {
+    int pos = 0;
+    append_text(buf, &pos, cap, "NAME STATUS ENTRYPOINTS\n");
+    append_text(buf, &pos, cap, "procfs stable /proc\n");
+    append_text(buf, &pos, cap, "health stable /proc/health,health,gui:health,make:report\n");
+    append_text(buf, &pos, cap, "interfaces stable /proc/interfaces,interfaces,gui:interfaces,make:report\n");
+    append_text(buf, &pos, cap, "apps stable /fs/apps,apps,gui:apps,tools:gen_app_registry\n");
+    append_text(buf, &pos, cap, "shell stable /bin/sh,pipes,redirection\n");
+    append_text(buf, &pos, cap, "gui experimental /bin/gui,/fs/apps\n");
+    append_text(buf, &pos, cap, "fs stable /fs,fsstat,tools:check_minifs\n");
+    append_text(buf, &pos, cap, "net experimental socket,wget,netstat,/proc/net\n");
+    append_text(buf, &pos, cap, "sync stable pipe,futex,/proc/sync\n");
+    append_text(buf, &pos, cap, "report stable make:report,build/project-report.md\n");
+    if (pos > cap - 1)
+        pos = cap - 1;
+    buf[pos] = 0;
+    return pos;
+}
+
 static int proc_meminfo_text(char *buf, int cap) {
     struct pmm_info info;
     int pos = 0;
@@ -287,6 +308,8 @@ static int proc_fds_text(char *buf, int cap) {
 static int proc_build_text(int node, char *buf, int cap) {
     if (node == PROC_NODE_HEALTH)
         return proc_health_text(buf, cap);
+    if (node == PROC_NODE_INTERFACES)
+        return proc_interfaces_text(buf, cap);
     if (node == PROC_NODE_TASKS)
         return task_dump_text(buf, cap, 0);
     if (node == PROC_NODE_THREADS)

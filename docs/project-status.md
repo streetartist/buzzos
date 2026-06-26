@@ -15,6 +15,9 @@ filesystem, and a user-space GUI app manager.
   files, including process, thread, network, memory, mount, and sync views.
 - Health interface: `/proc/health`, text-shell `health`, GUI-shell `health`,
   and `make report` all expose the same compact project health surface.
+- Interface matrix: `/proc/interfaces`, text-shell `interfaces`, GUI-shell
+  `interfaces`, and `make report` document the current stable/experimental
+  entrypoints without adding a heavier registry service.
 - GUI examples: `guidemo`, `notes`, `forms`, and `calc`.
 - App packaging: optional `.app` manifests provide `name`, `kind`, `version`,
   `summary`, `state`, `source`, and `readme` metadata for the App Center.
@@ -109,12 +112,14 @@ cat /proc/tasks
 cat /proc/threads
 cat /proc/meminfo
 cat /proc/health
+cat /proc/interfaces
 cat /proc/fds
 cat /proc/net
 cat /proc/sync
 cat /proc/mounts
 fdstat
 health
+interfaces
 ```
 
 Validate only seeded GUI app packaging:

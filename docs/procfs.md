@@ -10,6 +10,7 @@ system without adding a new syscall for every diagnostic.
 /proc/tasks
 /proc/threads
 /proc/health
+/proc/interfaces
 /proc/meminfo
 /proc/net
 /proc/sync
@@ -37,6 +38,26 @@ proc_entries
 The text shell exposes the same file through the `health` command. The GUI
 shell does the same, so the status surface is available through `/proc`, the
 CLI, and the user GUI without adding another syscall.
+
+`/proc/interfaces` is a compact capability matrix for BuzzOS entrypoints:
+
+```text
+NAME STATUS ENTRYPOINTS
+procfs stable /proc
+health stable /proc/health,health,gui:health,make:report
+interfaces stable /proc/interfaces,interfaces,gui:interfaces,make:report
+apps stable /fs/apps,apps,gui:apps,tools:gen_app_registry
+shell stable /bin/sh,pipes,redirection
+gui experimental /bin/gui,/fs/apps
+fs stable /fs,fsstat,tools:check_minifs
+net experimental socket,wget,netstat,/proc/net
+sync stable pipe,futex,/proc/sync
+report stable make:report,build/project-report.md
+```
+
+The text shell exposes it as `interfaces`; the GUI shell exposes the same
+command. This keeps the supported surfaces discoverable without a heavier
+service registry.
 
 `/proc/tasks` mirrors the process table format used by `ps`.
 
@@ -118,12 +139,14 @@ ls /proc
 cat /proc/tasks
 cat /proc/threads
 cat /proc/health
+cat /proc/interfaces
 cat /proc/meminfo
 cat /proc/fds
 cat /proc/net
 cat /proc/sync
 cat /proc/mounts
 health
+interfaces
 fdstat
 ```
 

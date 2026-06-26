@@ -58,6 +58,9 @@ the local verification report at `build/project-report.md`.
 - Multi-interface health surface: `/proc/health`, the text-shell `health`
   command, the GUI-shell `health` command, and `make report` share one compact
   status vocabulary.
+- Multi-interface capability matrix: `/proc/interfaces`, text-shell
+  `interfaces`, GUI-shell `interfaces`, and `make report` expose stable and
+  experimental entrypoints.
 
 ## Build And Run
 
@@ -181,6 +184,7 @@ cd [path]
 pwd
 stat <path>
 health
+interfaces
 fsstat
 fdstat
 cat <file>

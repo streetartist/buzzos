@@ -770,9 +770,9 @@ static void shell_print_help_topic(const char *topic) {
     topic = skip_spaces(topic);
     if (!topic[0]) {
         shell_log("HELP TOPICS: APPS GUI FILES");
-        shell_log("PROC EDIT  TRY HELP PROC");
+        shell_log("PROC EDIT  TRY INTERFACES");
         shell_log("RUN: GUIDEMO NOTES FORMS CALC");
-        shell_log("CMDS: HEALTH LS CAT PWD PS");
+        shell_log("CMDS: HEALTH INTERFACES LS");
         return;
     }
     if (streq(topic, "apps")) {
@@ -799,9 +799,10 @@ static void shell_print_help_topic(const char *topic) {
     if (streq(topic, "proc")) {
         shell_log("/PROC IS READ-ONLY");
         shell_log("HEALTH = /PROC/HEALTH");
+        shell_log("INTERFACES = /PROC/INTERFACES");
         shell_log("CAT /PROC/HEALTH");
-        shell_log("CAT /PROC/TASKS");
-        shell_log("CAT /PROC/NET SYNC FDS");
+        shell_log("CAT /PROC/INTERFACES");
+        shell_log("CAT /PROC/TASKS NET FDS");
         return;
     }
     if (streq(topic, "edit")) {
@@ -884,6 +885,8 @@ static void shell_execute(void) {
         shell_cmd_pwd();
     } else if (streq(cmd, "health")) {
         shell_cmd_cat("/proc/health");
+    } else if (streq(cmd, "interfaces")) {
+        shell_cmd_cat("/proc/interfaces");
     } else if (streq(cmd, "ps") || starts_with(cmd, "ps ")) {
         shell_cmd_ps();
     } else if (streq(cmd, "ls") || starts_with(cmd, "ls ")) {
@@ -1422,7 +1425,7 @@ static void draw_help(void) {
 
     text(14, 148, "SHELL HELP", 1, -1);
     text(14, 160, "HEALTH SHOWS /PROC/HEALTH", 0, -1);
-    text(14, 171, "HELP APPS GUI FILES PROC EDIT", 0, -1);
+    text(14, 171, "INTERFACES LISTS ENTRYPOINTS", 0, -1);
     text(14, 182, "GFX_MODE MOUSE_GET READ KEYS", 0, -1);
 }
 
@@ -1605,7 +1608,7 @@ static void init_state(void) {
     paint_erase = 0;
     frame_tick = 0;
     shell_log("READY");
-    shell_log("HELP HEALTH LS CAT PWD PS");
+    shell_log("HELP HEALTH INTERFACES");
     shell_log("GUIDEMO NOTES FORMS");
     scan_apps();
 }

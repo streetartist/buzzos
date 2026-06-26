@@ -40,6 +40,8 @@ short log for reviewers and contributors; deeper design notes live under
 - Added a compact multi-interface health surface through `/proc/health`, the
   text-shell `health` command, GUI-shell `health`, smoke coverage, and
   `make report` interface reporting.
+- Added a lightweight `/proc/interfaces` capability matrix with text-shell,
+  GUI-shell, smoke, and report coverage for stable/experimental entrypoints.
 - Improved pipe behavior with blocking read/write wakeups and coverage for
   blocking pipe scenarios.
 - Reworked futex wait/wake around scheduler-backed blocking, wake-by-address,
