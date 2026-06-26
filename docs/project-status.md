@@ -29,6 +29,8 @@ filesystem, and a user-space GUI app manager.
   `summary`, `state`, `source`, and `readme` metadata for the App Center.
 - App registry: `tools/gen_app_registry.py` generates `src/kernel/app_registry.h`
   from app sidecar metadata so kernel seeding stays data-driven.
+- Host tooling: `make doctor` / `tools/doctor.py` preflights the local Python,
+  Make, PowerShell, NASM, LLVM, QEMU, and workspace paths.
 - Initrd hygiene: user ELF payloads are section-stripped before embedding, and
   `tools/mkinitrd.py` emits compact 32-byte rows to reduce generated diff noise.
 - App management: the text shell also exposes `apps`, `apps info <name>`, and
@@ -69,6 +71,12 @@ filesystem, and a user-space GUI app manager.
   blocking, and edge behavior for pipe/futex primitives.
 
 ## Local Workflow
+
+Check local tools before building:
+
+```sh
+make doctor QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
 
 Build:
 

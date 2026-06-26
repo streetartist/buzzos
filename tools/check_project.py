@@ -647,6 +647,56 @@ def check_procfs_diagnostics():
     ok("procfs diagnostics: /proc/about, /proc/health, /proc/interfaces, /proc/limits, shell/GUI wrappers, and fdstat are covered")
 
 
+def check_host_doctor():
+    makefile = read_text("Makefile")
+    doctor = read_text("tools/doctor.py")
+    report_py = read_text("tools/project_report.py")
+    readme = read_text("README.md")
+    readme_en = read_text("README.en.md")
+    changelog = read_text("CHANGELOG.md")
+
+    for snippet in [
+        ".PHONY: all clean doctor",
+        "doctor:",
+        "tools/doctor.py --python",
+        "--qemu \"$(QEMU)\"",
+    ]:
+        if snippet not in makefile:
+            fail(f"Makefile is missing host doctor wiring: {snippet}")
+
+    for snippet in [
+        "def check_tool",
+        "def check_powershell",
+        "def check_workspace",
+        "--soft",
+        "--no-version",
+        "qemu-system-i386",
+        "llvm-objcopy",
+        "scripts/run-local.ps1",
+    ]:
+        if snippet not in doctor:
+            fail(f"tools/doctor.py is missing expected host check: {snippet}")
+
+    for snippet in [
+        "collect_host_doctor",
+        "## Host Doctor",
+        "tools/doctor.py",
+        "--soft",
+        "--no-version",
+        "make doctor",
+    ]:
+        if snippet not in report_py:
+            fail(f"project report is missing host doctor summary: {snippet}")
+
+    for snippet in ["make doctor", "QEMU=", "tools/doctor.py"]:
+        if snippet not in readme or snippet not in readme_en:
+            fail(f"README files are missing host doctor guidance: {snippet}")
+    if "make doctor" not in changelog:
+        fail("CHANGELOG is missing make doctor entry")
+
+    ok("host doctor: make target, tool checks, report summary, and docs are covered")
+
+
 def check_futex_blocking():
     sys_ipc = read_text("src/kernel/syscall/sys_ipc.c")
     sys_ipc_h = read_text("src/kernel/syscall/sys_ipc.h")
@@ -1031,6 +1081,7 @@ def main():
     check_syscall_abi()
     check_network_socket_state()
     check_procfs_diagnostics()
+    check_host_doctor()
     check_futex_blocking()
     check_shell_pipeline()
     check_pipe_blocking()

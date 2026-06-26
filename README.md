@@ -72,6 +72,14 @@ English: [README.en.md](README.en.md)
 | `powershell` | Windows 下打包镜像 |
 | `qemu-system-i386` | 运行 BuzzOS |
 
+先检查本地构建和运行环境：
+
+```sh
+make doctor QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
+
+`make doctor` 会运行 `tools/doctor.py`，检查 `python`、`make`、PowerShell、NASM、LLVM 工具链和 QEMU 路径。
+
 构建镜像：
 
 ```sh

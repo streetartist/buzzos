@@ -61,6 +61,8 @@ short log for reviewers and contributors; deeper design notes live under
 
 ### Filesystem And Tooling
 
+- Added `make doctor` / `tools/doctor.py` to preflight local Python, Make,
+  PowerShell, NASM, LLVM, QEMU, and workspace paths before building or running.
 - Added host-side minifs checks, negative checks, and repair checks.
 - Added project consistency checks for image layout, stripped user ELF payloads,
   compact initrd rows, generated app registry data, and seeded app outputs.

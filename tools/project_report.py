@@ -3,8 +3,11 @@ import argparse
 import contextlib
 import datetime as dt
 import io
+import json
 import re
+import subprocess
 import struct
+import sys
 from pathlib import Path
 
 from check_minifs import FsError, MiniFsImage, parse_make_int
@@ -54,6 +57,33 @@ def bytes_text(value):
 
 def file_size(path):
     return path.stat().st_size if path.exists() else None
+
+
+def collect_host_doctor(python_cmd, make_cmd, qemu_cmd):
+    cmd = [
+        sys.executable,
+        str(ROOT / "tools" / "doctor.py"),
+        "--json",
+        "--soft",
+        "--no-version",
+        "--python", python_cmd,
+        "--make", make_cmd,
+        "--qemu", qemu_cmd,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        data = json.loads(proc.stdout)
+    except Exception as exc:
+        return [{"check": "tools/doctor.py", "status": "error", "path": "", "hint": str(exc)}]
+    rows = []
+    for row in data.get("checks", []):
+        rows.append({
+            "check": row.get("name", ""),
+            "status": row.get("status", ""),
+            "path": row.get("path", ""),
+            "hint": row.get("hint", ""),
+        })
+    return rows
 
 
 def elf_load_end(path):
@@ -368,7 +398,7 @@ def table(headers, rows):
     return out
 
 
-def build_report():
+def build_report(python_cmd="python", make_cmd="make", qemu_cmd="qemu-system-i386"):
     makefile = read_text_if_exists("Makefile")
     kernel_sectors = parse_make_int("KERNEL_SECTORS", 0)
     fs_start = parse_make_int("FS_START_SECTOR", 512)
@@ -389,6 +419,10 @@ def build_report():
     lines.append("# BuzzOS Project Report")
     lines.append("")
     lines.append(f"Generated: {stamp}")
+    lines.append("")
+
+    lines.append("## Host Doctor")
+    lines.extend(table(["check", "status", "path", "hint"], collect_host_doctor(python_cmd, make_cmd, qemu_cmd)))
     lines.append("")
 
     lines.append("## Project Identity")
@@ -503,6 +537,7 @@ def build_report():
     lines.append("- `make verify` runs project checks, serial smoke with deterministic single/dual TCP socket coverage, minifs positive/negative/repair checks, and GUI smoke.")
     lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface/limit diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
     lines.append("- `make fs-check-repair` verifies conservative minifs repair on disposable corrupted image copies.")
+    lines.append("- `make doctor` checks the host build/run tools before a user spends time on a failing build.")
     lines.append("- `make report` writes this summary to `build/project-report.md`.")
     if headroom_status == "low":
         lines.append("- Kernel headroom is low; prefer user-space features or increase/reshape boot layout before adding kernel payload.")
@@ -514,9 +549,12 @@ def main():
     parser = argparse.ArgumentParser(description="Generate a BuzzOS local project report")
     parser.add_argument("--out", default="build/project-report.md", help="Markdown output path")
     parser.add_argument("--print", action="store_true", help="also print the report to stdout")
+    parser.add_argument("--python", default="python", help="Python command shown in host doctor")
+    parser.add_argument("--make", default="make", help="Make command shown in host doctor")
+    parser.add_argument("--qemu", default="qemu-system-i386", help="QEMU command/path shown in host doctor")
     args = parser.parse_args()
 
-    report = build_report()
+    report = build_report(args.python, args.make, args.qemu)
     out = ROOT / args.out if not Path(args.out).is_absolute() else Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report + "\n", encoding="utf-8", newline="\n")

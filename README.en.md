@@ -82,6 +82,15 @@ Required tools:
 | `powershell` | Image packing on Windows |
 | `qemu-system-i386` | Runs BuzzOS |
 
+Check the local build and run environment first:
+
+```sh
+make doctor QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+```
+
+`make doctor` runs `tools/doctor.py` and checks `python`, `make`, PowerShell,
+NASM, the LLVM toolchain, and the QEMU path.
+
 Build the image:
 
 ```sh

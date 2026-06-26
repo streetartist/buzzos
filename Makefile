@@ -105,7 +105,7 @@ INITRD_H := src/kernel/initrd.h
 APP_REGISTRY_H := src/kernel/app_registry.h
 GUI_APP_META := $(foreach app,$(GUI_APP_NAMES),$(wildcard src/user/bin/$(app).app src/user/bin/$(app).readme src/user/bin/$(app).seed))
 
-.PHONY: all clean run run-current run-local run-forms check-project app-check app-registry fs-check fs-ls fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
+.PHONY: all clean doctor run run-current run-local run-forms check-project app-check app-registry fs-check fs-ls fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
 
 all: $(IMAGE)
 
@@ -223,6 +223,9 @@ $(APP_REGISTRY_H): tools/gen_app_registry.py Makefile $(GUI_APP_META)
 user: $(INITRD_H)
 	@echo "User program built and initrd updated. Run 'make' to rebuild kernel."
 
+doctor:
+	$(PYTHON) tools/doctor.py --python "$(PYTHON)" --make "$(MAKE)" --qemu "$(QEMU)"
+
 run: $(IMAGE)
 	$(QEMU) -drive format=raw,file=$(IMAGE) -serial stdio -no-reboot -netdev user,id=n0 -device ne2k_isa,netdev=n0,iobase=0x300,irq=10
 
@@ -267,7 +270,7 @@ gui-smoke: $(IMAGE)
 	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gui-smoke.ps1 -Image $(IMAGE) -Qemu "$(QEMU)" -PythonPath "$(PYTHON)"
 
 report: $(IMAGE)
-	$(PYTHON) tools/project_report.py --out "$(BUILD)/project-report.md" --print
+	$(PYTHON) tools/project_report.py --out "$(BUILD)/project-report.md" --print --python "$(PYTHON)" --make "$(MAKE)" --qemu "$(QEMU)"
 
 verify: check-project smoke fs-check-smoke fs-check-negative fs-check-repair gui-smoke
 
