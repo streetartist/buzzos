@@ -91,13 +91,17 @@ file deletion.
 Inside BuzzOS, the shell exposes a small read-only view of the same metadata:
 
 ```text
+fsinfo
+cat /proc/fs
 fsstat
 ```
 
-It prints used inode counts, directory/file counts, block usage, data LBA, and
-maximum file size. The in-OS command is intentionally smaller than the host
-checker; it reports current counters, while `tools/check_minifs.py` performs
-cross-reference validation.
+`fsinfo` reads `/proc/fs` and prints the mount, driver, status, image location,
+inode/block counters, maximum file size, and the matching host-side check and
+repair commands. `fsstat` remains the compact syscall-backed counter view. Both
+in-OS commands are intentionally smaller than the host checker; they report
+current counters, while `tools/check_minifs.py` performs cross-reference
+validation.
 
 ## What It Validates
 

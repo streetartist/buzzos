@@ -17,6 +17,8 @@ short log for reviewers and contributors; deeper design notes live under
   procfs notes, minifs notes, IPC notes, and work-item tracking.
 - Added local-first run and verification guidance for Windows/QEMU workflows,
   including visible QEMU runs that keep keyboard input inside the emulator.
+- Added focused local startup and user guides covering repository setup, QEMU
+  focus/input, GUI demos, shell commands, `/fs`, `/proc`, and troubleshooting.
 
 ### User Experience
 
@@ -48,6 +50,9 @@ short log for reviewers and contributors; deeper design notes live under
 - Added `/proc/limits`, text-shell `limits`, GUI-shell `limits`, smoke
   coverage, and `make report` runtime limit reporting for lightweight capacity
   discovery.
+- Added `/proc/fs`, text-shell `fsinfo`, GUI-shell `fsinfo`, smoke coverage,
+  and `make report` filesystem interface reporting for `/fs`/minifs status and
+  host-side check/repair entrypoints.
 - Improved pipe behavior with blocking read/write wakeups and coverage for
   blocking pipe scenarios.
 - Reworked futex wait/wake around scheduler-backed blocking, wake-by-address,

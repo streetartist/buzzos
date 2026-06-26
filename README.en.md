@@ -4,7 +4,9 @@ BuzzOS is a minimal i386 POSIX-like operating system for learning and experiment
 
 Chinese main README: [README.md](README.md)
 
-Project log: [CHANGELOG.md](CHANGELOG.md). Current status and roadmap:
+Project log: [CHANGELOG.md](CHANGELOG.md). Local boot guide:
+[docs/boot-guide.md](docs/boot-guide.md). User guide:
+[docs/user-guide.md](docs/user-guide.md). Current status and roadmap:
 [docs/project-status.md](docs/project-status.md). Run `make report` to generate
 the local verification report at `build/project-report.md`.
 
@@ -67,6 +69,9 @@ the local verification report at `build/project-report.md`.
 - Lightweight runtime limits: `/proc/limits`, text-shell `limits`, GUI-shell
   `limits`, and `make report` expose task, fd, pipe, mount, memory, and minifs
   capacity boundaries without adding a configuration service.
+- Lightweight filesystem status: `/proc/fs`, text-shell `fsinfo`, GUI-shell
+  `fsinfo`, `fsstat`, smoke coverage, and `make report` expose `/fs`/minifs
+  status from the same compact surface.
 
 ## Build And Run
 
@@ -87,6 +92,10 @@ Show the local workflow commands:
 ```sh
 make help
 ```
+
+For the first local run, see [docs/boot-guide.md](docs/boot-guide.md). After
+BuzzOS boots, shell, GUI, textbox, `/fs`, and `/proc` usage are covered in
+[docs/user-guide.md](docs/user-guide.md).
 
 Check the local build and run environment first:
 
@@ -220,6 +229,7 @@ about
 health
 interfaces
 limits
+fsinfo
 fsstat
 fdstat
 cat <file>
@@ -278,7 +288,7 @@ Graphics desktop:
 gui
 ```
 
-It starts in APP MANAGER. Select Paint, Shell, or an external GUI program from `/fs/apps`. Paint draws with the mouse, and the GUI Shell supports `help`, `ls`, `cat`, `echo`, `apps`, and `run <path>`. Put ELF32 GUI programs in `/fs/apps/<name>` and launch them by clicking the app entry or running `run /fs/apps/<name>` from the GUI shell. The seeded examples are:
+It starts in APP MANAGER. Select Paint, Shell, or an external GUI program from `/fs/apps`. Paint draws with the mouse, and the GUI Shell supports `help`, `about`, `health`, `limits`, `interfaces`, `fsinfo`, `ls`, `cat`, `echo`, `apps`, and `run <path>`. Put ELF32 GUI programs in `/fs/apps/<name>` and launch them by clicking the app entry or running `run /fs/apps/<name>` from the GUI shell. The seeded examples are:
 
 - `guidemo`: buttons, color swatches, a focused single-line textbox, mouse input, and persistent state in `/fs/apps/guidemo.cfg`.
 - `notes`: a multiline text editor that saves to `/fs/apps/notes.txt`.
@@ -315,6 +325,8 @@ The current GUI is a user-space full-screen app manager, not a complete window s
 Filesystem test example:
 
 ```text
+fsinfo
+cat /proc/fs
 fsstat
 mkdir /fs/a
 write /fs/a/t hello
@@ -341,7 +353,7 @@ BuzzOS is intentionally small but structured to grow. It is not a complete Unix 
 - Add stronger TCP socket regression coverage, timeout, retransmission, window, and larger receive-flow behavior.
 - Add `fork`, `execve`, shell quoting/env expansion, and job-control polish.
 - Add directory compaction, space-reclaim reporting, and stronger rename/unlink boundary tests to minifs.
-- Expand `/proc` with deeper socket, fd flag, filesystem health, and scheduler statistics.
+- Expand `/proc` with deeper socket, fd flag, and scheduler statistics.
 
 ## Code Map
 
@@ -362,3 +374,5 @@ BuzzOS is intentionally small but structured to grow. It is not a complete Unix 
 - In-OS assembler: [src/user/bin/basm.c](src/user/bin/basm.c)
 - User libc: [src/user/libc/libc.c](src/user/libc/libc.c)
 - Assembly tutorial: [docs/assembly-programming.md](docs/assembly-programming.md)
+- Local boot guide: [docs/boot-guide.md](docs/boot-guide.md)
+- User guide: [docs/user-guide.md](docs/user-guide.md)

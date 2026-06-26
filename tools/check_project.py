@@ -557,7 +557,7 @@ def check_procfs_diagnostics():
     report_py = read_text("tools/project_report.py")
     smoke_ps1 = read_text("scripts/smoke.ps1")
 
-    for entry in ["about", "health", "interfaces", "limits", "tasks", "threads", "meminfo", "net", "sync", "fds", "mounts"]:
+    for entry in ["about", "health", "interfaces", "limits", "tasks", "threads", "meminfo", "net", "sync", "fds", "mounts", "fs"]:
         if f'{{ "{entry}",' not in procfs:
             fail(f"procfs is missing /proc/{entry}")
 
@@ -566,18 +566,24 @@ def check_procfs_diagnostics():
         "PROC_NODE_HEALTH",
         "PROC_NODE_INTERFACES",
         "PROC_NODE_LIMITS",
+        "PROC_NODE_FS",
         "proc_about_text",
         "proc_health_text",
         "proc_interfaces_text",
         "proc_limits_text",
+        "proc_fs_text",
         "lightweight-i386-posix-like-os",
         "interfaces proc shell gui report",
         "NAME STATUS ENTRYPOINTS",
         "about stable /proc/about,about,gui:about,make:report",
         "limits stable /proc/limits,limits,gui:limits,make:report",
+        "fs stable /fs,/proc/fs,fsinfo,fsstat,tools:check_minifs",
         "max_tasks",
         "max_fd_per_owner",
         "minifs_max_file_size",
+        "mount /fs",
+        "driver minifs",
+        "host_repair make fs-repair",
         "gui:interfaces,make:report",
         "minifs_info(&fs)",
         "net_ip",
@@ -600,6 +606,8 @@ def check_procfs_diagnostics():
         fail("shell is missing interfaces /proc/interfaces command")
     if "cmd_limits" not in shell_c or 'cmd_cat("/proc/limits")' not in shell_c:
         fail("shell is missing limits /proc/limits command")
+    if "cmd_fsinfo" not in shell_c or 'cmd_cat("/proc/fs")' not in shell_c:
+        fail("shell is missing fsinfo /proc/fs command")
     if 'shell_cmd_cat("/proc/about")' not in gui_c or "ABOUT = /PROC/ABOUT" not in gui_c:
         fail("GUI shell is missing about /proc/about command/help")
     if 'shell_cmd_cat("/proc/health")' not in gui_c or "HEALTH = /PROC/HEALTH" not in gui_c:
@@ -608,6 +616,8 @@ def check_procfs_diagnostics():
         fail("GUI shell is missing interfaces /proc/interfaces command/help")
     if 'shell_cmd_cat("/proc/limits")' not in gui_c or "LIMITS = /PROC/LIMITS" not in gui_c:
         fail("GUI shell is missing limits /proc/limits command/help")
+    if 'shell_cmd_cat("/proc/fs")' not in gui_c or "FSINFO = /PROC/FS" not in gui_c:
+        fail("GUI shell is missing fsinfo /proc/fs command/help")
     if "collect_health_interfaces" not in report_py or "/proc/health" not in report_py:
         fail("project report is missing health interface summary")
     if "collect_project_identity" not in report_py or "/proc/about" not in report_py:
@@ -616,25 +626,36 @@ def check_procfs_diagnostics():
         fail("project report is missing runtime interface summary")
     if "collect_runtime_limits" not in report_py or "/proc/limits" not in report_py:
         fail("project report is missing runtime limits summary")
+    if "collect_fs_interfaces" not in report_py or "/proc/fs" not in report_py:
+        fail("project report is missing filesystem interface summary")
     for snippet in [
         "cat /proc/about",
         "cat /proc/health",
         "cat /proc/interfaces",
         "cat /proc/limits",
+        "cat /proc/fs",
         "about",
         "health",
         "interfaces",
         "limits",
+        "fsinfo",
         "name\\s+BuzzOS",
         "lightweight-i386-posix-like-os",
         "status\\s+ok",
         "interfaces\\s+proc\\s+shell\\s+gui\\s+report",
+        "proc_entries\\s+12",
         "NAME\\s+STATUS\\s+ENTRYPOINTS",
         "about\\s+stable\\s+/proc/about,about,gui:about,make:report",
         "limits\\s+stable\\s+/proc/limits,limits,gui:limits,make:report",
+        "fs\\s+stable\\s+/fs,/proc/fs,fsinfo,fsstat,tools:check_minifs",
         "max_tasks\\s+32",
         "max_fd_per_owner\\s+32",
         "minifs_max_file_size\\s+135168",
+        "mount\\s+/fs",
+        "driver\\s+minifs",
+        "inodes_total\\s+128",
+        "blocks_total\\s+382",
+        "host_repair\\s+make fs-repair",
         "gui:interfaces,make:report",
         "fs_status\\s+ok",
         "cat /proc/fds",
@@ -644,7 +665,7 @@ def check_procfs_diagnostics():
         if snippet not in smoke_ps1:
             fail(f"smoke.ps1 is missing procfs diagnostics coverage: {snippet}")
 
-    ok("procfs diagnostics: /proc/about, /proc/health, /proc/interfaces, /proc/limits, shell/GUI wrappers, and fdstat are covered")
+    ok("procfs diagnostics: /proc/about, /proc/health, /proc/interfaces, /proc/limits, /proc/fs, shell/GUI wrappers, and fdstat are covered")
 
 
 def check_host_doctor():
@@ -654,6 +675,9 @@ def check_host_doctor():
     report_py = read_text("tools/project_report.py")
     readme = read_text("README.md")
     readme_en = read_text("README.en.md")
+    docs_readme = read_text("docs/README.md")
+    boot_guide = read_text("docs/boot-guide.md")
+    user_guide = read_text("docs/user-guide.md")
     minifs_doc = read_text("docs/minifs.md")
     work_items = read_text("docs/work-items.md")
     changelog = read_text("CHANGELOG.md")
@@ -718,8 +742,12 @@ def check_host_doctor():
     for snippet in [
         "collect_host_doctor",
         "collect_local_workflow",
+        "collect_guide_docs",
+        "collect_fs_interfaces",
         "## Host Doctor",
         "## Local Workflow",
+        "## Guide Docs",
+        "## Filesystem Interfaces",
         "tools/doctor.py",
         "make help",
         "make run-gui",
@@ -732,9 +760,21 @@ def check_host_doctor():
         if snippet not in report_py:
             fail(f"project report is missing host doctor summary: {snippet}")
 
-    for snippet in ["make help", "make doctor", "QEMU=", "tools/doctor.py", "make run-gui", "make run-calc", "make fs-repair"]:
+    for snippet in ["make help", "make doctor", "QEMU=", "tools/doctor.py", "make run-gui", "make run-calc", "make fs-repair", "docs/boot-guide.md", "docs/user-guide.md"]:
         if snippet not in readme or snippet not in readme_en:
             fail(f"README files are missing host doctor guidance: {snippet}")
+
+    for snippet in ["boot-guide.md", "user-guide.md", "本地启动与引导指南", "用户指南"]:
+        if snippet not in docs_readme:
+            fail(f"docs/README.md is missing guide link: {snippet}")
+
+    for snippet in ["make doctor", "make run-local", "Ctrl+Alt+G", "make run-gui", "No rule to make target 'smoke'", "fsinfo", "cat /proc/fs"]:
+        if snippet not in boot_guide:
+            fail(f"docs/boot-guide.md is missing local startup guidance: {snippet}")
+
+    for snippet in ["help proc", "gui", "guidemo", "notes", "forms", "calc", "fsinfo", "cat /proc/fs", "/proc", "/fs", "输入框", "nano"]:
+        if snippet not in user_guide:
+            fail(f"docs/user-guide.md is missing user guidance: {snippet}")
 
     for snippet in ["make fs-repair", "FS_REPAIR_IMAGE", "--repair --out"]:
         if snippet not in minifs_doc:

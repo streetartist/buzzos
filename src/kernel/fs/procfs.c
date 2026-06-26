@@ -18,6 +18,7 @@ enum {
     PROC_NODE_SYNC,
     PROC_NODE_FDS,
     PROC_NODE_MOUNTS,
+    PROC_NODE_FS,
 };
 
 struct proc_entry {
@@ -37,6 +38,7 @@ static const struct proc_entry proc_entries[] = {
     { "sync", PROC_NODE_SYNC },
     { "fds", PROC_NODE_FDS },
     { "mounts", PROC_NODE_MOUNTS },
+    { "fs", PROC_NODE_FS },
 };
 
 static int proc_name_len(const char *s) {
@@ -193,10 +195,66 @@ static int proc_interfaces_text(char *buf, int cap) {
     append_text(buf, &pos, cap, "apps stable /fs/apps,apps,gui:apps,tools:gen_app_registry\n");
     append_text(buf, &pos, cap, "shell stable /bin/sh,pipes,redirection\n");
     append_text(buf, &pos, cap, "gui experimental /bin/gui,/fs/apps\n");
-    append_text(buf, &pos, cap, "fs stable /fs,fsstat,tools:check_minifs\n");
+    append_text(buf, &pos, cap, "fs stable /fs,/proc/fs,fsinfo,fsstat,tools:check_minifs\n");
     append_text(buf, &pos, cap, "net experimental socket,wget,netstat,/proc/net\n");
     append_text(buf, &pos, cap, "sync stable pipe,futex,/proc/sync\n");
     append_text(buf, &pos, cap, "report stable make:report,build/project-report.md\n");
+    if (pos > cap - 1)
+        pos = cap - 1;
+    buf[pos] = 0;
+    return pos;
+}
+
+static int proc_fs_text(char *buf, int cap) {
+    struct fs_info fs;
+    int pos = 0;
+    int fs_ok = minifs_info(&fs) == 0;
+
+    append_text(buf, &pos, cap, "mount /fs\n");
+    append_text(buf, &pos, cap, "driver minifs\n");
+    append_text(buf, &pos, cap, "status ");
+    append_text(buf, &pos, cap, fs_ok ? "ok" : "unavailable");
+    append_char(buf, &pos, cap, '\n');
+    append_text(buf, &pos, cap, "lba_start ");
+    append_u32(buf, &pos, cap, MINIFS_LBA_START);
+    append_char(buf, &pos, cap, '\n');
+    append_text(buf, &pos, cap, "sectors ");
+    append_u32(buf, &pos, cap, MINIFS_SECTORS);
+    append_char(buf, &pos, cap, '\n');
+    if (fs_ok) {
+        append_text(buf, &pos, cap, "magic ");
+        append_u32(buf, &pos, cap, fs.magic);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "inodes_used ");
+        append_u32(buf, &pos, cap, fs.used_inodes);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "inodes_total ");
+        append_u32(buf, &pos, cap, fs.inode_count);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "dirs ");
+        append_u32(buf, &pos, cap, fs.dir_count);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "files ");
+        append_u32(buf, &pos, cap, fs.file_count);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "blocks_used ");
+        append_u32(buf, &pos, cap, fs.used_blocks);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "blocks_free ");
+        append_u32(buf, &pos, cap, fs.free_blocks);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "blocks_total ");
+        append_u32(buf, &pos, cap, fs.block_count);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "data_lba ");
+        append_u32(buf, &pos, cap, fs.data_lba);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "max_file_size ");
+        append_u32(buf, &pos, cap, fs.max_file_size);
+        append_char(buf, &pos, cap, '\n');
+    }
+    append_text(buf, &pos, cap, "host_check make fs-check\n");
+    append_text(buf, &pos, cap, "host_repair make fs-repair\n");
     if (pos > cap - 1)
         pos = cap - 1;
     buf[pos] = 0;
@@ -415,6 +473,8 @@ static int proc_build_text(int node, char *buf, int cap) {
         return proc_fds_text(buf, cap);
     if (node == PROC_NODE_MOUNTS)
         return proc_mounts_text(buf, cap);
+    if (node == PROC_NODE_FS)
+        return proc_fs_text(buf, cap);
     return -1;
 }
 

@@ -772,7 +772,7 @@ static void shell_print_help_topic(const char *topic) {
         shell_log("HELP TOPICS: APPS GUI FILES");
         shell_log("PROC EDIT  TRY ABOUT");
         shell_log("RUN: GUIDEMO NOTES FORMS CALC");
-        shell_log("CMDS: ABOUT HEALTH LIMITS");
+        shell_log("CMDS: ABOUT HEALTH LIMITS FSINFO");
         return;
     }
     if (streq(topic, "apps")) {
@@ -793,7 +793,7 @@ static void shell_print_help_topic(const char *topic) {
         shell_log("/FS IS WRITABLE MINIFS");
         shell_log("WRITE /FS/A TEXT; CAT /FS/A");
         shell_log("RM MV MKDIR RMDIR STAT");
-        shell_log("FSSTAT SHOWS CAPACITY");
+        shell_log("FSINFO SHOWS /PROC/FS");
         return;
     }
     if (streq(topic, "proc")) {
@@ -802,11 +802,12 @@ static void shell_print_help_topic(const char *topic) {
         shell_log("HEALTH = /PROC/HEALTH");
         shell_log("LIMITS = /PROC/LIMITS");
         shell_log("INTERFACES = /PROC/INTERFACES");
+        shell_log("FSINFO = /PROC/FS");
         shell_log("CAT /PROC/ABOUT");
         shell_log("CAT /PROC/LIMITS");
         shell_log("CAT /PROC/HEALTH");
         shell_log("CAT /PROC/INTERFACES");
-        shell_log("CAT /PROC/TASKS NET FDS");
+        shell_log("CAT /PROC/FS TASKS NET FDS");
         return;
     }
     if (streq(topic, "edit")) {
@@ -893,6 +894,8 @@ static void shell_execute(void) {
         shell_cmd_cat("/proc/health");
     } else if (streq(cmd, "limits")) {
         shell_cmd_cat("/proc/limits");
+    } else if (streq(cmd, "fsinfo")) {
+        shell_cmd_cat("/proc/fs");
     } else if (streq(cmd, "interfaces")) {
         shell_cmd_cat("/proc/interfaces");
     } else if (streq(cmd, "ps") || starts_with(cmd, "ps ")) {
@@ -1433,8 +1436,8 @@ static void draw_help(void) {
 
     text(14, 148, "SHELL HELP", 1, -1);
     text(14, 160, "ABOUT SHOWS PROJECT INFO", 0, -1);
-    text(14, 171, "LIMITS SHOW CAPACITY BOUNDS", 0, -1);
-    text(14, 182, "GFX_MODE MOUSE_GET READ KEYS", 0, -1);
+    text(14, 171, "FSINFO SHOWS /FS STATUS", 0, -1);
+    text(14, 182, "LIMITS SHOW CAPACITY BOUNDS", 0, -1);
 }
 
 static void draw_apps(void) {
@@ -1616,7 +1619,7 @@ static void init_state(void) {
     paint_erase = 0;
     frame_tick = 0;
     shell_log("READY");
-    shell_log("ABOUT HEALTH LIMITS");
+    shell_log("ABOUT HEALTH LIMITS FSINFO");
     shell_log("GUIDEMO NOTES FORMS");
     scan_apps();
 }

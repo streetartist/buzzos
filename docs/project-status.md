@@ -24,6 +24,9 @@ filesystem, and a user-space GUI app manager.
 - Runtime limits: `/proc/limits`, text-shell `limits`, GUI-shell `limits`, and
   `make report` expose capacity boundaries for tasks, fds, pipes, mounts,
   memory, and minifs without adding a configuration service.
+- Filesystem status: `/proc/fs`, text-shell `fsinfo`, GUI-shell `fsinfo`,
+  `fsstat`, smoke coverage, and `make report` expose the live `/fs`/minifs
+  counters and host-side check/repair entrypoints.
 - GUI examples: `guidemo`, `notes`, `forms`, and `calc`.
 - App packaging: optional `.app` manifests provide `name`, `kind`, `version`,
   `summary`, `state`, `source`, and `readme` metadata for the App Center.
@@ -33,6 +36,9 @@ filesystem, and a user-space GUI app manager.
   workflow, `make run-gui` and `make run-*` demo targets open seeded GUI
   examples directly, and `make doctor` / `tools/doctor.py` preflights the local
   Python, Make, PowerShell, NASM, LLVM, QEMU, and workspace paths.
+- User documentation: `docs/boot-guide.md` covers local startup, QEMU input,
+  and boot troubleshooting; `docs/user-guide.md` covers shell, GUI, text input,
+  `/fs`, `/proc`, and common diagnostics.
 - Initrd hygiene: user ELF payloads are section-stripped before embedding, and
   `tools/mkinitrd.py` emits compact 32-byte rows to reduce generated diff noise.
 - App management: the text shell also exposes `apps`, `apps info <name>`, and
@@ -142,6 +148,7 @@ cat /proc/meminfo
 cat /proc/health
 cat /proc/interfaces
 cat /proc/limits
+cat /proc/fs
 cat /proc/fds
 cat /proc/net
 cat /proc/sync
@@ -151,6 +158,7 @@ about
 health
 interfaces
 limits
+fsinfo
 ```
 
 Validate only seeded GUI app packaging:
@@ -222,8 +230,8 @@ make image-reset-fs
   that the minifs checker rejects representative corruption cases.
 - `make fs-check-repair` verifies that conservative minifs repair fixes stale
   free-inode metadata and bitmap drift while refusing unsafe corruptions.
-- `fsstat` is covered by the serial smoke test and reports `/fs` usage from
-  inside BuzzOS.
+- `fsinfo`, `cat /proc/fs`, and `fsstat` are covered by the serial smoke test
+  and report `/fs` usage from inside BuzzOS.
 - `make verify` runs the serial smoke test, checks the smoke test image at
   `build/buzzos-test.img`, and runs negative and repair minifs corruption
   fixtures, covering post-boot formatting, app seeding, file creation,

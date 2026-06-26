@@ -13,6 +13,7 @@ system without adding a new syscall for every diagnostic.
 /proc/health
 /proc/interfaces
 /proc/limits
+/proc/fs
 /proc/meminfo
 /proc/net
 /proc/sync
@@ -69,7 +70,7 @@ limits stable /proc/limits,limits,gui:limits,make:report
 apps stable /fs/apps,apps,gui:apps,tools:gen_app_registry
 shell stable /bin/sh,pipes,redirection
 gui experimental /bin/gui,/fs/apps
-fs stable /fs,fsstat,tools:check_minifs
+fs stable /fs,/proc/fs,fsinfo,fsstat,tools:check_minifs
 net experimental socket,wget,netstat,/proc/net
 sync stable pipe,futex,/proc/sync
 report stable make:report,build/project-report.md
@@ -102,6 +103,32 @@ minifs_max_file_size
 
 The text shell exposes it as `limits`; the GUI shell exposes the same command.
 These are read-only capacity facts, not tunables.
+
+`/proc/fs` exposes the live `/fs` minifs status in one read-only text file:
+
+```text
+mount /fs
+driver minifs
+status ok
+lba_start 768
+sectors 512
+magic 1397113421
+inodes_used
+inodes_total
+dirs
+files
+blocks_used
+blocks_free
+blocks_total
+data_lba
+max_file_size
+host_check make fs-check
+host_repair make fs-repair
+```
+
+The text shell and GUI shell expose it as `fsinfo`. `fsstat` remains the
+syscall-backed compact counter view; `fsinfo` is the procfs view that also
+points users to host-side check and repair commands.
 
 `/proc/tasks` mirrors the process table format used by `ps`.
 
@@ -186,6 +213,7 @@ cat /proc/threads
 cat /proc/health
 cat /proc/interfaces
 cat /proc/limits
+cat /proc/fs
 cat /proc/meminfo
 cat /proc/fds
 cat /proc/net
@@ -195,6 +223,7 @@ about
 health
 interfaces
 limits
+fsinfo
 fdstat
 ```
 

@@ -98,6 +98,27 @@ def collect_local_workflow():
     ]
 
 
+def collect_guide_docs():
+    docs = [
+        ("README.md", "main quickstart and feature map"),
+        ("README.en.md", "English quickstart and feature map"),
+        ("docs/boot-guide.md", "host setup, build, run, QEMU input, and boot troubleshooting"),
+        ("docs/user-guide.md", "inside-BuzzOS shell, GUI, filesystem, and diagnostics guide"),
+        ("docs/project-status.md", "maturity status, gates, and roadmap"),
+        ("docs/user-gui.md", "seeded user GUI app examples"),
+        ("docs/procfs.md", "runtime status files"),
+        ("docs/minifs.md", "persistent filesystem checks and repair"),
+    ]
+    rows = []
+    for path, purpose in docs:
+        rows.append({
+            "doc": path,
+            "status": "present" if (ROOT / path).exists() else "missing",
+            "purpose": purpose,
+        })
+    return rows
+
+
 def elf_load_end(path):
     data = path.read_bytes()
     if len(data) < 52 or data[:4] != b"\x7fELF":
@@ -261,6 +282,41 @@ def collect_health_interfaces():
             "interface": "smoke coverage",
             "status": "yes" if "cat /proc/health" in smoke and "status\\s+ok" in smoke else "no",
             "evidence": "serial smoke",
+        },
+    ]
+
+
+def collect_fs_interfaces():
+    procfs = read_text_if_exists("src/kernel/fs/procfs.c")
+    shell = read_text_if_exists("src/user/bin/shell.c")
+    gui = read_text_if_exists("src/user/bin/gui.c")
+    smoke = read_text_if_exists("scripts/smoke.ps1")
+    docs = read_text_if_exists("docs/procfs.md") + "\n" + read_text_if_exists("docs/user-guide.md")
+    return [
+        {
+            "interface": "/proc/fs",
+            "status": "yes" if '"fs", PROC_NODE_FS' in procfs and "proc_fs_text" in procfs else "no",
+            "evidence": "procfs",
+        },
+        {
+            "interface": "shell fsinfo",
+            "status": "yes" if 'cmd_cat("/proc/fs")' in shell else "no",
+            "evidence": "text shell",
+        },
+        {
+            "interface": "GUI shell fsinfo",
+            "status": "yes" if 'shell_cmd_cat("/proc/fs")' in gui else "no",
+            "evidence": "user GUI",
+        },
+        {
+            "interface": "smoke coverage",
+            "status": "yes" if "cat /proc/fs" in smoke and "host_repair\\s+make fs-repair" in smoke else "no",
+            "evidence": "serial smoke",
+        },
+        {
+            "interface": "guide coverage",
+            "status": "yes" if "/proc/fs" in docs and "fsinfo" in docs else "no",
+            "evidence": "docs",
         },
     ]
 
@@ -441,6 +497,10 @@ def build_report(python_cmd="python", make_cmd="make", qemu_cmd="qemu-system-i38
     lines.extend(table(["phase", "command", "purpose"], collect_local_workflow()))
     lines.append("")
 
+    lines.append("## Guide Docs")
+    lines.extend(table(["doc", "status", "purpose"], collect_guide_docs()))
+    lines.append("")
+
     lines.append("## Project Identity")
     lines.extend(table(["item", "value"], collect_project_identity()))
     lines.append("")
@@ -524,6 +584,10 @@ def build_report(python_cmd="python", make_cmd="make", qemu_cmd="qemu-system-i38
     lines.extend(table(["limit", "value"], collect_runtime_limits()))
     lines.append("")
 
+    lines.append("## Filesystem Interfaces")
+    lines.extend(table(["interface", "status", "evidence"], collect_fs_interfaces()))
+    lines.append("")
+
     lines.append("## IPC")
     lines.extend(table(["check", "purpose", "smoke", "pipe_buf"], collect_ipc_status()))
     lines.append("")
@@ -551,12 +615,13 @@ def build_report(python_cmd="python", make_cmd="make", qemu_cmd="qemu-system-i38
     lines.append("## Gates")
     lines.append("")
     lines.append("- `make verify` runs project checks, serial smoke with deterministic single/dual TCP socket coverage, minifs positive/negative/repair checks, and GUI smoke.")
-    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface/limit diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
+    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface/limit/fs diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, guide docs, and app manifest checks.")
     lines.append("- `make fs-repair` writes a conservatively repaired minifs image copy instead of overwriting the current image.")
     lines.append("- `make fs-check-repair` verifies conservative minifs repair on disposable corrupted image copies.")
     lines.append("- `make help` prints the recommended local workflow without building the image.")
     lines.append("- `make run-gui` and the `make run-*` GUI demo shortcuts open seeded GUI examples in visible QEMU.")
     lines.append("- `make doctor` checks the host build/run tools before a user spends time on a failing build.")
+    lines.append("- `docs/boot-guide.md` and `docs/user-guide.md` cover local startup, QEMU input, shell, GUI, diagnostics, and troubleshooting.")
     lines.append("- `make report` writes this summary to `build/project-report.md`.")
     if headroom_status == "low":
         lines.append("- Kernel headroom is low; prefer user-space features or increase/reshape boot layout before adding kernel payload.")
