@@ -552,6 +552,7 @@ def build_report(python_cmd="python", make_cmd="make", qemu_cmd="qemu-system-i38
     lines.append("")
     lines.append("- `make verify` runs project checks, serial smoke with deterministic single/dual TCP socket coverage, minifs positive/negative/repair checks, and GUI smoke.")
     lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface/limit diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
+    lines.append("- `make fs-repair` writes a conservatively repaired minifs image copy instead of overwriting the current image.")
     lines.append("- `make fs-check-repair` verifies conservative minifs repair on disposable corrupted image copies.")
     lines.append("- `make help` prints the recommended local workflow without building the image.")
     lines.append("- `make run-gui` and the `make run-*` GUI demo shortcuts open seeded GUI examples in visible QEMU.")

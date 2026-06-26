@@ -33,6 +33,19 @@ List the tree after checking it:
 make fs-ls
 ```
 
+Write a conservatively repaired copy of the current image:
+
+```sh
+make fs-repair
+```
+
+By default this writes `build/buzzos-repaired.img` and does not overwrite the
+current image. Override the input or output image when needed:
+
+```sh
+make fs-repair FS_IMAGE=build/buzzos-test.img FS_REPAIR_IMAGE=build/buzzos-test-fixed.img
+```
+
 Check a specific image:
 
 ```sh
@@ -66,6 +79,7 @@ be derived from otherwise valid inode/block references:
 Repair writes to a copy unless `--in-place` is explicit:
 
 ```sh
+make fs-repair
 python tools/check_minifs.py --image build/buzzos-test.img --repair --out build/buzzos-test-fixed.img
 ```
 

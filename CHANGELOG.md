@@ -64,6 +64,8 @@ short log for reviewers and contributors; deeper design notes live under
 - Added `make run-gui`, `make run-guidemo`, `make run-notes`,
   `make run-forms`, and `make run-calc` as visible QEMU shortcuts for seeded
   GUI demos.
+- Added `make fs-repair` to write a conservatively repaired minifs image copy
+  without overwriting the current image.
 - Added `make help` / `tools/workflow.py` to print the recommended local
   workflow without building the image.
 - Added `make doctor` / `tools/doctor.py` to preflight local Python, Make,

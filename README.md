@@ -162,7 +162,15 @@ make image-reset-fs
 | LBA 1..767 | kernel 预留区，最多 383 KiB |
 | LBA 768..1279 | `/fs` mini 文件系统区域，256 KiB |
 
-`tools/mkimage.ps1` 默认会在重建镜像时保留旧镜像的 `/fs` 区域。需要清空时显式运行 `make image-reset-fs`。
+`tools/mkimage.ps1` 默认会在重建镜像时保留旧镜像的 `/fs` 区域。需要清空时显式运行 `make image-reset-fs`。检查和修复 `/fs` 时可以使用：
+
+```sh
+make fs-check
+make fs-ls
+make fs-repair
+```
+
+`make fs-repair` 默认写出 `build/buzzos-repaired.img`，不会覆盖当前镜像。
 
 ## Shell 命令
 
@@ -292,7 +300,7 @@ BuzzOS 当前是“小而可扩展”的实现，不是完整 Unix：
 
 - 增加更多 TCP socket 回归测试，并继续完善超时、重传、窗口和更大的接收流场景。
 - 增加 `fork` / `execve` / shell 引号与环境变量展开 / job control 打磨。
-- 给 minifs 加 fsck、free list 校验和更完整的 rename/unlink 语义。
+- 给 minifs 增加目录压缩、空间回收统计和更完整的 rename/unlink 边界测试。
 - 继续扩展 `/proc`，补齐更细的 socket、fd flag、文件系统健康度和调度统计。
 
 ## 代码入口

@@ -81,6 +81,11 @@ WORKFLOW = [
     },
     {
         "phase": "fs",
+        "command": "make fs-repair",
+        "purpose": "write a conservatively repaired /fs image copy",
+    },
+    {
+        "phase": "fs",
         "command": "make image-reset-fs",
         "purpose": "rebuild the image with a clean /fs region",
     },

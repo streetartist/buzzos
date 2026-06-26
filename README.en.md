@@ -190,7 +190,15 @@ If `make` reports that `build/buzzos.img` or `build/user/*.o` is in use, QEMU is
 | LBA 1..767 | reserved kernel area, up to 383.5 KiB |
 | LBA 768..1279 | `/fs` mini filesystem area, 256 KiB |
 
-`tools/mkimage.ps1` preserves the old `/fs` region by default when rebuilding the image, including layout moves when it can find the minifs superblock. Use `make image-reset-fs` when you want a clean filesystem.
+`tools/mkimage.ps1` preserves the old `/fs` region by default when rebuilding the image, including layout moves when it can find the minifs superblock. Use `make image-reset-fs` when you want a clean filesystem. To inspect or conservatively repair `/fs`, run:
+
+```sh
+make fs-check
+make fs-ls
+make fs-repair
+```
+
+`make fs-repair` writes `build/buzzos-repaired.img` by default and does not overwrite the current image.
 
 ## Shell Commands
 
@@ -332,7 +340,7 @@ BuzzOS is intentionally small but structured to grow. It is not a complete Unix 
 
 - Add stronger TCP socket regression coverage, timeout, retransmission, window, and larger receive-flow behavior.
 - Add `fork`, `execve`, shell quoting/env expansion, and job-control polish.
-- Add fsck-style validation and stronger rename/unlink semantics to minifs.
+- Add directory compaction, space-reclaim reporting, and stronger rename/unlink boundary tests to minifs.
 - Expand `/proc` with deeper socket, fd flag, filesystem health, and scheduler statistics.
 
 ## Code Map

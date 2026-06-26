@@ -6,6 +6,7 @@ FS_START_SECTOR := 768
 FS_SECTORS := 512
 FS_IMAGE ?= $(IMAGE)
 FS_TEST_IMAGE ?= $(BUILD)/buzzos-test.img
+FS_REPAIR_IMAGE ?= $(BUILD)/buzzos-repaired.img
 
 # Keep MSYS/Git shells from rewriting initrd virtual paths such as /bin/sh
 # into Windows host paths when invoking native Python.
@@ -105,7 +106,7 @@ INITRD_H := src/kernel/initrd.h
 APP_REGISTRY_H := src/kernel/app_registry.h
 GUI_APP_META := $(foreach app,$(GUI_APP_NAMES),$(wildcard src/user/bin/$(app).app src/user/bin/$(app).readme src/user/bin/$(app).seed))
 
-.PHONY: all clean help doctor run run-current run-local run-gui run-guidemo run-notes run-forms run-calc check-project app-check app-registry fs-check fs-ls fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
+.PHONY: all clean help doctor run run-current run-local run-gui run-guidemo run-notes run-forms run-calc check-project app-check app-registry fs-check fs-ls fs-repair fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
 
 all: $(IMAGE)
 
@@ -268,6 +269,9 @@ fs-check: $(IMAGE)
 
 fs-ls: $(IMAGE)
 	$(PYTHON) tools/check_minifs.py --image "$(FS_IMAGE)" --list
+
+fs-repair: $(IMAGE)
+	$(PYTHON) tools/check_minifs.py --image "$(FS_IMAGE)" --repair --out "$(FS_REPAIR_IMAGE)"
 
 smoke: $(IMAGE)
 	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke.ps1 -Image $(IMAGE) -Qemu "$(QEMU)"

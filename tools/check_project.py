@@ -654,6 +654,8 @@ def check_host_doctor():
     report_py = read_text("tools/project_report.py")
     readme = read_text("README.md")
     readme_en = read_text("README.en.md")
+    minifs_doc = read_text("docs/minifs.md")
+    work_items = read_text("docs/work-items.md")
     changelog = read_text("CHANGELOG.md")
 
     for snippet in [
@@ -673,6 +675,9 @@ def check_host_doctor():
         "-Command forms",
         "run-calc:",
         "-Command calc",
+        "FS_REPAIR_IMAGE",
+        "fs-repair:",
+        "tools/check_minifs.py --image \"$(FS_IMAGE)\" --repair --out \"$(FS_REPAIR_IMAGE)\"",
     ]:
         if snippet not in makefile:
             fail(f"Makefile is missing host doctor wiring: {snippet}")
@@ -703,6 +708,7 @@ def check_host_doctor():
         "make gui-smoke",
         "make verify",
         "make report",
+        "make fs-repair",
         "make image-reset-fs",
         "--markdown",
     ]:
@@ -718,6 +724,7 @@ def check_host_doctor():
         "make help",
         "make run-gui",
         "make run-*",
+        "make fs-repair",
         "--soft",
         "--no-version",
         "make doctor",
@@ -725,10 +732,18 @@ def check_host_doctor():
         if snippet not in report_py:
             fail(f"project report is missing host doctor summary: {snippet}")
 
-    for snippet in ["make help", "make doctor", "QEMU=", "tools/doctor.py", "make run-gui", "make run-calc"]:
+    for snippet in ["make help", "make doctor", "QEMU=", "tools/doctor.py", "make run-gui", "make run-calc", "make fs-repair"]:
         if snippet not in readme or snippet not in readme_en:
             fail(f"README files are missing host doctor guidance: {snippet}")
-    for snippet in ["make help", "make doctor", "make run-gui", "make run-calc"]:
+
+    for snippet in ["make fs-repair", "FS_REPAIR_IMAGE", "--repair --out"]:
+        if snippet not in minifs_doc:
+            fail(f"docs/minifs.md is missing fs repair guidance: {snippet}")
+    for snippet in ["Done/P2: minifs", "make fs-repair", "tools/check_minifs_repair.py"]:
+        if snippet not in work_items:
+            fail(f"docs/work-items.md is missing minifs repair completion: {snippet}")
+
+    for snippet in ["make help", "make doctor", "make run-gui", "make run-calc", "make fs-repair"]:
         if snippet not in changelog:
             fail(f"CHANGELOG is missing workflow entry: {snippet}")
 

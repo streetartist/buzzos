@@ -125,6 +125,7 @@ Inspect the persistent mini filesystem:
 ```sh
 make fs-check
 make fs-ls
+make fs-repair
 make fs-check-negative
 make fs-check-repair
 ```
@@ -215,6 +216,8 @@ make image-reset-fs
   `make run-calc` provide one-command visible QEMU entrypoints for the GUI
   manager and seeded user GUI examples.
 - `make fs-check` validates the minifs metadata in a raw disk image.
+- `make fs-repair` writes a conservatively repaired minifs image copy and keeps
+  the current image unchanged by default.
 - `make fs-check-negative` mutates a disposable image in memory and verifies
   that the minifs checker rejects representative corruption cases.
 - `make fs-check-repair` verifies that conservative minifs repair fixes stale
