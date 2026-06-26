@@ -663,6 +663,16 @@ def check_host_doctor():
         "doctor:",
         "tools/doctor.py --python",
         "--qemu \"$(QEMU)\"",
+        "run-gui:",
+        "-Command gui",
+        "run-guidemo:",
+        "-Command guidemo",
+        "run-notes:",
+        "-Command notes",
+        "run-forms:",
+        "-Command forms",
+        "run-calc:",
+        "-Command calc",
     ]:
         if snippet not in makefile:
             fail(f"Makefile is missing host doctor wiring: {snippet}")
@@ -684,7 +694,11 @@ def check_host_doctor():
         "WORKFLOW =",
         "make doctor",
         "make run-local",
+        "make run-gui",
+        "make run-guidemo",
+        "make run-notes",
         "make run-forms",
+        "make run-calc",
         "make smoke",
         "make gui-smoke",
         "make verify",
@@ -702,6 +716,8 @@ def check_host_doctor():
         "## Local Workflow",
         "tools/doctor.py",
         "make help",
+        "make run-gui",
+        "make run-*",
         "--soft",
         "--no-version",
         "make doctor",
@@ -709,10 +725,10 @@ def check_host_doctor():
         if snippet not in report_py:
             fail(f"project report is missing host doctor summary: {snippet}")
 
-    for snippet in ["make help", "make doctor", "QEMU=", "tools/doctor.py"]:
+    for snippet in ["make help", "make doctor", "QEMU=", "tools/doctor.py", "make run-gui", "make run-calc"]:
         if snippet not in readme or snippet not in readme_en:
             fail(f"README files are missing host doctor guidance: {snippet}")
-    for snippet in ["make help", "make doctor"]:
+    for snippet in ["make help", "make doctor", "make run-gui", "make run-calc"]:
         if snippet not in changelog:
             fail(f"CHANGELOG is missing workflow entry: {snippet}")
 

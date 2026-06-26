@@ -105,7 +105,7 @@ INITRD_H := src/kernel/initrd.h
 APP_REGISTRY_H := src/kernel/app_registry.h
 GUI_APP_META := $(foreach app,$(GUI_APP_NAMES),$(wildcard src/user/bin/$(app).app src/user/bin/$(app).readme src/user/bin/$(app).seed))
 
-.PHONY: all clean help doctor run run-current run-local run-forms check-project app-check app-registry fs-check fs-ls fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
+.PHONY: all clean help doctor run run-current run-local run-gui run-guidemo run-notes run-forms run-calc check-project app-check app-registry fs-check fs-ls fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
 
 all: $(IMAGE)
 
@@ -239,8 +239,20 @@ run-current:
 run-local:
 	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)"
 
+run-gui:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command gui
+
+run-guidemo:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command guidemo
+
+run-notes:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command notes
+
 run-forms:
 	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command forms
+
+run-calc:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command calc
 
 check-project: $(IMAGE)
 	$(PYTHON) tools/check_project.py

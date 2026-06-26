@@ -29,7 +29,7 @@ English: [README.en.md](README.en.md)
 - ELF32 用户程序加载，用户态 `/bin/sh` shell，支持 Ctrl+C、左右移动光标、Home/End、Delete、上下翻历史、多段 shell 管道和基础重定向。
 - 用户态 `nano` 编辑器和 `basm` 小型汇编器，可在 BuzzOS 内编辑、汇编并运行简单汇编程序。
 - 用户态 `gui` 桌面，通过 framebuffer blit、PS/2 鼠标和图形 syscall 提供 paint、内置 shell 与 `/fs/apps` GUI 程序启动器。
-- `/fs/apps` 默认种子用户 GUI：`guidemo` 单行文本框、`notes` 多行编辑器、`forms` 多文本框表单、持久化状态和 App Center `.app` 元数据。
+- `/fs/apps` 默认种子用户 GUI：`guidemo` 单行文本框、`notes` 多行编辑器、`forms` 多文本框表单、`calc` 双输入计算器、持久化状态和 App Center `.app` 元数据。
 - 抢占式任务调度，进程/线程模型，`spawn`、`join`、`sleep`、`waitpid`、`kill`。
 - 系统调用 ABI：文件、进程、目录、网络、IPC、同步等基础接口。
 - VFS + mount table：
@@ -104,10 +104,14 @@ make run
 make run-local QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-直接启动到表单输入 GUI 示例：
+直接启动到 GUI 管理器或指定用户 GUI 示例：
 
 ```sh
+make run-gui QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+make run-guidemo QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+make run-notes QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 make run-forms QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+make run-calc QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
 只运行已有镜像，不触发重新构建：
@@ -194,6 +198,7 @@ apps [list|info <name>|run <name>]
 guidemo
 notes
 forms
+calc
 rm <file>
 mv <old> <new>
 exec <program> [args...] [&|bg]
@@ -244,6 +249,7 @@ gui
 - `guidemo`：按钮、色块、单行文本框、鼠标输入和 `/fs/apps/guidemo.cfg` 持久化状态。
 - `notes`：多行文本编辑器，保存到 `/fs/apps/notes.txt`。
 - `forms`：四个单行文本框，支持鼠标聚焦、Tab/Enter 切换、Left/Right/Home/End/Delete 编辑、实时预览和 `/fs/apps/forms.cfg` 持久化状态。
+- `calc`：两个单行输入框、运算按钮、键盘编辑、结果反馈和 `/fs/apps/calc.cfg` 持久化状态。
 
 每个用户 GUI app 可以在可执行文件旁放一个 `.app` manifest，使用简单的 `key=value` 字段，例如 `name`、`kind`、`version`、`summary`、`state`、`source`。App Center 会读取这些字段显示详情，同时仍然从磁盘启动 ELF 可执行文件。
 

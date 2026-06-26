@@ -61,6 +61,9 @@ short log for reviewers and contributors; deeper design notes live under
 
 ### Filesystem And Tooling
 
+- Added `make run-gui`, `make run-guidemo`, `make run-notes`,
+  `make run-forms`, and `make run-calc` as visible QEMU shortcuts for seeded
+  GUI demos.
 - Added `make help` / `tools/workflow.py` to print the recommended local
   workflow without building the image.
 - Added `make doctor` / `tools/doctor.py` to preflight local Python, Make,

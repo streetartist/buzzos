@@ -31,7 +31,7 @@ the local verification report at `build/project-report.md`.
 - ELF32 user-program loader and a user-space `/bin/sh` shell with Ctrl+C, left/right cursor movement, Home/End, Delete, up/down command history, multi-stage pipelines, and basic redirection.
 - User-space `nano` editor and small `basm` assembler for editing, assembling, and running simple assembly programs inside BuzzOS.
 - User-space `gui` desktop using framebuffer blits, PS/2 mouse input, and graphics syscalls. It includes Paint, a built-in shell panel, and a `/fs/apps` GUI app launcher.
-- Seeded user GUI apps in `/fs/apps`: `guidemo` with a single-line textbox, `notes` with multiline editing, and `forms` with multiple focused text boxes, cursor editing, live preview, saved state, and `.app` manifest metadata in the App Center.
+- Seeded user GUI apps in `/fs/apps`: `guidemo` with a single-line textbox, `notes` with multiline editing, `forms` with multiple focused text boxes, and `calc` with two focused input boxes, saved state, and `.app` manifest metadata in the App Center.
 - Preemptive scheduling, process/thread model, `spawn`, `join`, `sleep`, `waitpid`, and `kill`.
 - Syscall ABI for files, processes, directories, networking, IPC, and synchronization.
 - VFS with a mount table:
@@ -116,10 +116,14 @@ instead of stealing the terminal:
 make run-local QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-Start directly in the form-input GUI demo:
+Start directly in the GUI manager or a seeded user GUI demo:
 
 ```sh
+make run-gui QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+make run-guidemo QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+make run-notes QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 make run-forms QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+make run-calc QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
 Run the existing image without rebuilding:
@@ -221,6 +225,7 @@ apps [list|info <name>|run <name>]
 guidemo
 notes
 forms
+calc
 write <file> <text>
 rm <file>
 mv <old> <new>
@@ -270,6 +275,7 @@ It starts in APP MANAGER. Select Paint, Shell, or an external GUI program from `
 - `guidemo`: buttons, color swatches, a focused single-line textbox, mouse input, and persistent state in `/fs/apps/guidemo.cfg`.
 - `notes`: a multiline text editor that saves to `/fs/apps/notes.txt`.
 - `forms`: four single-line text boxes with mouse focus, Tab/Enter focus movement, Left/Right/Home/End/Delete editing, live preview, and persistent state in `/fs/apps/forms.cfg`.
+- `calc`: two single-line input boxes, operation buttons, keyboard editing, result feedback, and persistent state in `/fs/apps/calc.cfg`.
 
 Each user GUI app has source-side metadata files such as
 `src/user/bin/forms.app`, `src/user/bin/forms.readme`, and optional

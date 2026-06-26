@@ -42,6 +42,16 @@ operation buttons, keyboard editing, result feedback, and saved state in
 
 ## Run It
 
+From the host, open the GUI manager or a specific seeded app directly:
+
+```sh
+make run-gui
+make run-guidemo
+make run-notes
+make run-forms
+make run-calc
+```
+
 From the text shell:
 
 ```text

@@ -30,8 +30,9 @@ filesystem, and a user-space GUI app manager.
 - App registry: `tools/gen_app_registry.py` generates `src/kernel/app_registry.h`
   from app sidecar metadata so kernel seeding stays data-driven.
 - Host tooling: `make help` / `tools/workflow.py` lists the recommended local
-  workflow, and `make doctor` / `tools/doctor.py` preflights the local Python,
-  Make, PowerShell, NASM, LLVM, QEMU, and workspace paths.
+  workflow, `make run-gui` and `make run-*` demo targets open seeded GUI
+  examples directly, and `make doctor` / `tools/doctor.py` preflights the local
+  Python, Make, PowerShell, NASM, LLVM, QEMU, and workspace paths.
 - Initrd hygiene: user ELF payloads are section-stripped before embedding, and
   `tools/mkinitrd.py` emits compact 32-byte rows to reduce generated diff noise.
 - App management: the text shell also exposes `apps`, `apps info <name>`, and
@@ -97,10 +98,14 @@ Run a visible QEMU session without stealing terminal input:
 make run-local QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
-Start directly in the form-input GUI:
+Start directly in the GUI manager or a seeded GUI app:
 
 ```sh
+make run-gui QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+make run-guidemo QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+make run-notes QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 make run-forms QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
+make run-calc QEMU="C:\Program Files\qemu\qemu-system-i386.exe"
 ```
 
 Run the smoke test:
@@ -206,6 +211,9 @@ make image-reset-fs
   VGA/BIOS hole.
 - `make app-check` validates seeded `/fs/apps` manifests and their generated
   user ELF files without running QEMU.
+- `make run-gui`, `make run-guidemo`, `make run-notes`, `make run-forms`, and
+  `make run-calc` provide one-command visible QEMU entrypoints for the GUI
+  manager and seeded user GUI examples.
 - `make fs-check` validates the minifs metadata in a raw disk image.
 - `make fs-check-negative` mutates a disposable image in memory and verifies
   that the minifs checker rejects representative corruption cases.
