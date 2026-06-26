@@ -9,12 +9,34 @@ system without adding a new syscall for every diagnostic.
 ```text
 /proc/tasks
 /proc/threads
+/proc/health
 /proc/meminfo
 /proc/net
 /proc/sync
 /proc/fds
 /proc/mounts
 ```
+
+`/proc/health` is the compact cross-interface health summary. It is the first
+status file to try when you want one screen of runtime state:
+
+```text
+status
+interfaces
+mem_free_pages
+mem_used_pages
+mem_managed_pages
+fs_status
+fs_used_inodes
+fs_used_blocks
+fs_free_blocks
+net_ip
+proc_entries
+```
+
+The text shell exposes the same file through the `health` command. The GUI
+shell does the same, so the status surface is available through `/proc`, the
+CLI, and the user GUI without adding another syscall.
 
 `/proc/tasks` mirrors the process table format used by `ps`.
 
@@ -95,11 +117,13 @@ From the BuzzOS shell:
 ls /proc
 cat /proc/tasks
 cat /proc/threads
+cat /proc/health
 cat /proc/meminfo
 cat /proc/fds
 cat /proc/net
 cat /proc/sync
 cat /proc/mounts
+health
 fdstat
 ```
 

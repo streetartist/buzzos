@@ -13,6 +13,8 @@ filesystem, and a user-space GUI app manager.
   `/fs/apps`.
 - Pseudo filesystems: `/dev`, persistent `/fs`, and read-only `/proc` status
   files, including process, thread, network, memory, mount, and sync views.
+- Health interface: `/proc/health`, text-shell `health`, GUI-shell `health`,
+  and `make report` all expose the same compact project health surface.
 - GUI examples: `guidemo`, `notes`, `forms`, and `calc`.
 - App packaging: optional `.app` manifests provide `name`, `kind`, `version`,
   `summary`, `state`, `source`, and `readme` metadata for the App Center.
@@ -106,11 +108,13 @@ ls /proc
 cat /proc/tasks
 cat /proc/threads
 cat /proc/meminfo
+cat /proc/health
 cat /proc/fds
 cat /proc/net
 cat /proc/sync
 cat /proc/mounts
 fdstat
+health
 ```
 
 Validate only seeded GUI app packaging:
@@ -167,8 +171,9 @@ make image-reset-fs
   hardening and bad runtime fixture coverage, kernel/user syscall ABI agreement,
   futex scheduler-backed blocking, TCP PCB ownership/demux buffers and smoke
   coverage, shell stdio-only fd inheritance, multi-stage pipeline/redirection
-  support, pipe blocking semantics, initrd blob reachability, procfs diagnostic
-  entries, seeded app manifests, and kernel placement outside the VGA/BIOS hole.
+  support, pipe blocking semantics, initrd blob reachability, procfs/health
+  diagnostic entries, seeded app manifests, and kernel placement outside the
+  VGA/BIOS hole.
 - `make app-check` validates seeded `/fs/apps` manifests and their generated
   user ELF files without running QEMU.
 - `make fs-check` validates the minifs metadata in a raw disk image.

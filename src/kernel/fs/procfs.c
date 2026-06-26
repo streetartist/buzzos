@@ -2,10 +2,12 @@
 #include "task.h"
 #include "net.h"
 #include "sys_ipc.h"
+#include "minifs/minifs.h"
 #include "vfs_internal.h"
 
 enum {
     PROC_NODE_DIR = 0,
+    PROC_NODE_HEALTH,
     PROC_NODE_TASKS,
     PROC_NODE_THREADS,
     PROC_NODE_MEMINFO,
@@ -21,6 +23,7 @@ struct proc_entry {
 };
 
 static const struct proc_entry proc_entries[] = {
+    { "health", PROC_NODE_HEALTH },
     { "tasks", PROC_NODE_TASKS },
     { "threads", PROC_NODE_THREADS },
     { "meminfo", PROC_NODE_MEMINFO },
@@ -91,6 +94,70 @@ static void append_u32(char *buf, int *pos, int cap, uint32_t value) {
     }
     while (n > 0)
         append_char(buf, pos, cap, tmp[--n]);
+}
+
+static void append_ipv4(char *buf, int *pos, int cap, uint32_t ip) {
+    append_u32(buf, pos, cap, ip & 0xFFu);
+    append_char(buf, pos, cap, '.');
+    append_u32(buf, pos, cap, (ip >> 8) & 0xFFu);
+    append_char(buf, pos, cap, '.');
+    append_u32(buf, pos, cap, (ip >> 16) & 0xFFu);
+    append_char(buf, pos, cap, '.');
+    append_u32(buf, pos, cap, (ip >> 24) & 0xFFu);
+}
+
+static int proc_entry_count(void) {
+    return (int)(sizeof(proc_entries) / sizeof(proc_entries[0]));
+}
+
+static int proc_health_text(char *buf, int cap) {
+    struct pmm_info mem;
+    struct fs_info fs;
+    int pos = 0;
+    int fs_ok;
+
+    pmm_info(&mem);
+    fs_ok = minifs_info(&fs) == 0;
+
+    append_text(buf, &pos, cap, "status ok\n");
+    append_text(buf, &pos, cap, "interfaces proc shell gui report\n");
+
+    append_text(buf, &pos, cap, "mem_free_pages ");
+    append_u32(buf, &pos, cap, mem.free_pages);
+    append_char(buf, &pos, cap, '\n');
+    append_text(buf, &pos, cap, "mem_used_pages ");
+    append_u32(buf, &pos, cap, mem.used_pages);
+    append_char(buf, &pos, cap, '\n');
+    append_text(buf, &pos, cap, "mem_managed_pages ");
+    append_u32(buf, &pos, cap, mem.managed_pages);
+    append_char(buf, &pos, cap, '\n');
+
+    append_text(buf, &pos, cap, "fs_status ");
+    append_text(buf, &pos, cap, fs_ok ? "ok" : "unavailable");
+    append_char(buf, &pos, cap, '\n');
+    if (fs_ok) {
+        append_text(buf, &pos, cap, "fs_used_inodes ");
+        append_u32(buf, &pos, cap, fs.used_inodes);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "fs_used_blocks ");
+        append_u32(buf, &pos, cap, fs.used_blocks);
+        append_char(buf, &pos, cap, '\n');
+        append_text(buf, &pos, cap, "fs_free_blocks ");
+        append_u32(buf, &pos, cap, fs.free_blocks);
+        append_char(buf, &pos, cap, '\n');
+    }
+
+    append_text(buf, &pos, cap, "net_ip ");
+    append_ipv4(buf, &pos, cap, net_ip);
+    append_char(buf, &pos, cap, '\n');
+    append_text(buf, &pos, cap, "proc_entries ");
+    append_u32(buf, &pos, cap, (uint32_t)proc_entry_count());
+    append_char(buf, &pos, cap, '\n');
+
+    if (pos > cap - 1)
+        pos = cap - 1;
+    buf[pos] = 0;
+    return pos;
 }
 
 static int proc_meminfo_text(char *buf, int cap) {
@@ -218,6 +285,8 @@ static int proc_fds_text(char *buf, int cap) {
 }
 
 static int proc_build_text(int node, char *buf, int cap) {
+    if (node == PROC_NODE_HEALTH)
+        return proc_health_text(buf, cap);
     if (node == PROC_NODE_TASKS)
         return task_dump_text(buf, cap, 0);
     if (node == PROC_NODE_THREADS)

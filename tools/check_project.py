@@ -553,13 +553,20 @@ def check_network_socket_state():
 def check_procfs_diagnostics():
     procfs = read_text("src/kernel/fs/procfs.c")
     shell_c = read_text("src/user/bin/shell.c")
+    gui_c = read_text("src/user/bin/gui.c")
+    report_py = read_text("tools/project_report.py")
     smoke_ps1 = read_text("scripts/smoke.ps1")
 
-    for entry in ["tasks", "threads", "meminfo", "net", "sync", "fds", "mounts"]:
+    for entry in ["health", "tasks", "threads", "meminfo", "net", "sync", "fds", "mounts"]:
         if f'{{ "{entry}",' not in procfs:
             fail(f"procfs is missing /proc/{entry}")
 
     for snippet in [
+        "PROC_NODE_HEALTH",
+        "proc_health_text",
+        "interfaces proc shell gui report",
+        "minifs_info(&fs)",
+        "net_ip",
         "PROC_NODE_FDS",
         "proc_fds_text",
         "OWNER FD OF REFS FLAGS KIND NAME DETAIL",
@@ -571,11 +578,26 @@ def check_procfs_diagnostics():
 
     if "cmd_fdstat" not in shell_c or 'cmd_cat("/proc/fds")' not in shell_c:
         fail("shell is missing fdstat /proc/fds command")
-    for snippet in ["cat /proc/fds", "fdstat", "OWNER\\s+FD\\s+OF\\s+REFS"]:
+    if "cmd_health" not in shell_c or 'cmd_cat("/proc/health")' not in shell_c:
+        fail("shell is missing health /proc/health command")
+    if 'shell_cmd_cat("/proc/health")' not in gui_c or "HEALTH = /PROC/HEALTH" not in gui_c:
+        fail("GUI shell is missing health /proc/health command/help")
+    if "collect_health_interfaces" not in report_py or "/proc/health" not in report_py:
+        fail("project report is missing health interface summary")
+    for snippet in [
+        "cat /proc/health",
+        "health",
+        "status\\s+ok",
+        "interfaces\\s+proc\\s+shell\\s+gui\\s+report",
+        "fs_status\\s+ok",
+        "cat /proc/fds",
+        "fdstat",
+        "OWNER\\s+FD\\s+OF\\s+REFS",
+    ]:
         if snippet not in smoke_ps1:
-            fail(f"smoke.ps1 is missing /proc/fds coverage: {snippet}")
+            fail(f"smoke.ps1 is missing procfs diagnostics coverage: {snippet}")
 
-    ok("procfs diagnostics: /proc/fds and fdstat are covered")
+    ok("procfs diagnostics: /proc/health, /proc/fds, health, and fdstat are covered")
 
 
 def check_futex_blocking():

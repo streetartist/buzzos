@@ -180,6 +180,35 @@ def collect_procfs_entries():
     return rows
 
 
+def collect_health_interfaces():
+    procfs = read_text_if_exists("src/kernel/fs/procfs.c")
+    shell = read_text_if_exists("src/user/bin/shell.c")
+    gui = read_text_if_exists("src/user/bin/gui.c")
+    smoke = read_text_if_exists("scripts/smoke.ps1")
+    return [
+        {
+            "interface": "/proc/health",
+            "status": "yes" if '"health", PROC_NODE_HEALTH' in procfs and "proc_health_text" in procfs else "no",
+            "evidence": "procfs",
+        },
+        {
+            "interface": "shell health",
+            "status": "yes" if 'cmd_cat("/proc/health")' in shell else "no",
+            "evidence": "text shell",
+        },
+        {
+            "interface": "GUI shell health",
+            "status": "yes" if 'shell_cmd_cat("/proc/health")' in gui else "no",
+            "evidence": "user GUI",
+        },
+        {
+            "interface": "smoke coverage",
+            "status": "yes" if "cat /proc/health" in smoke and "status\\s+ok" in smoke else "no",
+            "evidence": "serial smoke",
+        },
+    ]
+
+
 def collect_ipc_status():
     vfs_internal = read_text_if_exists("src/kernel/fs/vfs_internal.h")
     smoke = read_text_if_exists("scripts/smoke.ps1")
@@ -327,6 +356,10 @@ def build_report():
         lines.append("No procfs entries found.")
     lines.append("")
 
+    lines.append("## Health Interfaces")
+    lines.extend(table(["interface", "status", "evidence"], collect_health_interfaces()))
+    lines.append("")
+
     lines.append("## IPC")
     lines.extend(table(["check", "purpose", "smoke", "pipe_buf"], collect_ipc_status()))
     lines.append("")
@@ -354,7 +387,7 @@ def build_report():
     lines.append("## Gates")
     lines.append("")
     lines.append("- `make verify` runs project checks, serial smoke with deterministic single/dual TCP socket coverage, minifs positive/negative/repair checks, and GUI smoke.")
-    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
+    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs and health diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
     lines.append("- `make fs-check-repair` verifies conservative minifs repair on disposable corrupted image copies.")
     lines.append("- `make report` writes this summary to `build/project-report.md`.")
     if headroom_status == "low":
