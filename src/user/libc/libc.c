@@ -38,6 +38,9 @@ static int syscall5(int nr, int a1, int a2, int a3, int a4, int a5) {
     return ret;
 }
 
+static int gfx_origin_x;
+static int gfx_origin_y;
+
 enum { SYS_EXIT=1, SYS_OPEN=2, SYS_CLOSE=3, SYS_READ=4, SYS_WRITE=5,
        SYS_DUP=16, SYS_DUP2=17, SYS_STAT=18, SYS_GETDENTS=19,
        SYS_SPAWN_PROC=20, SYS_PS=21, SYS_REBOOT=22, SYS_MKDIR=23,
@@ -48,7 +51,8 @@ enum { SYS_EXIT=1, SYS_OPEN=2, SYS_CLOSE=3, SYS_READ=4, SYS_WRITE=5,
        SYS_NETINFO=39, SYS_PIPE=40, SYS_FUTEX_WAIT=41, SYS_FUTEX_WAKE=42,
        SYS_GFX_MODE=43, SYS_GFX_CLEAR=44, SYS_GFX_PUTPIXEL=45,
        SYS_GFX_FILL_RECT=46, SYS_GFX_TEXT=47, SYS_FB_BLIT=48,
-       SYS_MOUSE_GET=49, SYS_FSSTAT=50, SYS_FUTEX_WAIT_TIMEOUT=51 };
+       SYS_MOUSE_GET=49, SYS_FSSTAT=50, SYS_FUTEX_WAIT_TIMEOUT=51,
+       SYS_GFX_INFO=52 };
 
 void exit(int code) {
     syscall1(SYS_EXIT, code);
@@ -228,23 +232,46 @@ int gfx_clear(int color) {
 }
 
 int gfx_putpixel(int x, int y, int color) {
-    return syscall3(SYS_GFX_PUTPIXEL, x, y, color);
+    return syscall3(SYS_GFX_PUTPIXEL, x + gfx_origin_x, y + gfx_origin_y, color);
 }
 
 int gfx_fill_rect(int x, int y, int w, int h, int color) {
-    return syscall5(SYS_GFX_FILL_RECT, x, y, w, h, color);
+    return syscall5(SYS_GFX_FILL_RECT, x + gfx_origin_x, y + gfx_origin_y, w, h, color);
 }
 
 int gfx_text(int x, int y, const char *s, int fg, int bg) {
-    return syscall5(SYS_GFX_TEXT, x, y, (int)(uintptr_t)s, fg, bg);
+    return syscall5(SYS_GFX_TEXT, x + gfx_origin_x, y + gfx_origin_y,
+                    (int)(uintptr_t)s, fg, bg);
 }
 
 int fb_blit(int x, int y, int w, int h, const uint8_t *pixels) {
-    return syscall5(SYS_FB_BLIT, x, y, w, h, (int)(uintptr_t)pixels);
+    return syscall5(SYS_FB_BLIT, x + gfx_origin_x, y + gfx_origin_y, w, h,
+                    (int)(uintptr_t)pixels);
 }
 
 int mouse_get(struct mouse_state *out) {
-    return syscall1(SYS_MOUSE_GET, (int)(uintptr_t)out);
+    int ret = syscall1(SYS_MOUSE_GET, (int)(uintptr_t)out);
+    if (ret == 0 && out) {
+        out->x -= gfx_origin_x;
+        out->y -= gfx_origin_y;
+    }
+    return ret;
+}
+
+int gfx_info(struct gfx_info *out) {
+    return syscall1(SYS_GFX_INFO, (int)(uintptr_t)out);
+}
+
+void gfx_set_origin(int x, int y) {
+    gfx_origin_x = x;
+    gfx_origin_y = y;
+}
+
+void gfx_get_origin(int *x_out, int *y_out) {
+    if (x_out)
+        *x_out = gfx_origin_x;
+    if (y_out)
+        *y_out = gfx_origin_y;
 }
 
 enum { SYS_SPAWN=6, SYS_YIELD=7, SYS_JOIN=8, SYS_SLEEP=9, SYS_KILL=10,

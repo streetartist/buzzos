@@ -1,0 +1,3 @@
+TextEdit is a BuzzOS GUI text editor.
+
+Open and Save use /fs/textedit.txt.

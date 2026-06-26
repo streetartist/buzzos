@@ -129,6 +129,7 @@ def generate(apps):
     for path, data, size, refresh in entries:
         print(f"    {{ {c_string_literal(path)}, {data}, {size}, {refresh} }},")
     print("};")
+    print(f"static const size_t app_seed_entry_count = {len(entries)};")
     print("")
     print("#endif /* BUZZOS_APP_REGISTRY_H */")
 
@@ -139,8 +140,6 @@ def main():
     parser.add_argument("--out", help="write UTF-8 output to this path instead of stdout")
     args = parser.parse_args()
     apps = args.apps.split()
-    if not apps:
-        fail("no apps provided")
     if args.out:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):

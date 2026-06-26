@@ -1,4 +1,5 @@
 #include "elf.h"
+#include "paging.h"
 #include "user_bounds.h"
 
 static int add_overflows_u32(uint32_t a, uint32_t b, uint32_t *out) {
@@ -78,6 +79,8 @@ uint32_t elf_load(const uint8_t *buf, size_t size) {
         if (!file_range_ok(phdr->p_offset, phdr->p_filesz, size))
             return 0;
         if (!user_range_ok(phdr->p_vaddr, phdr->p_memsz))
+            return 0;
+        if (paging_map_user_range(phdr->p_vaddr, phdr->p_memsz) < 0)
             return 0;
         if ((phdr->p_flags & PF_X) && entry_in_segment(ehdr->e_entry, phdr))
             entry_ok = 1;

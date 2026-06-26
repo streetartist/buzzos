@@ -83,6 +83,13 @@ struct mouse_state {
     uint32_t wheel_seq;
 };
 
+struct gfx_info {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+};
+
 /* --- Syscalls --- */
 void exit(int code) __attribute__((noreturn));
 int  open(const char *path, int flags);
@@ -135,6 +142,9 @@ int  gfx_fill_rect(int x, int y, int w, int h, int color);
 int  gfx_text(int x, int y, const char *s, int fg, int bg);
 int  fb_blit(int x, int y, int w, int h, const uint8_t *pixels);
 int  mouse_get(struct mouse_state *out);
+int  gfx_info(struct gfx_info *out);
+void gfx_set_origin(int x, int y);
+void gfx_get_origin(int *x_out, int *y_out);
 
 /* --- Threads --- */
 typedef void (*thread_fn)(void);

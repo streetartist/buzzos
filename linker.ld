@@ -6,6 +6,8 @@ SECTIONS
     __kernel_start = .;
 
     .text : {
+        . = ALIGN(8);
+        *(.multiboot)
         *(.text.entry)
         *(.text*)
     }

@@ -6,7 +6,9 @@
 #define MINIFS_MAGIC       0x5346424Du /* MBFS */
 #define MINIFS_BLOCK_SIZE  512
 #define MINIFS_INODES      128
-#define MINIFS_BLOCKS      (MINIFS_SECTORS - 1 - MINIFS_INODES - 1)
+#define MINIFS_META_FREE   (MINIFS_SECTORS - 1 - MINIFS_INODES)
+#define MINIFS_BITMAP_SECTORS ((MINIFS_META_FREE + MINIFS_BLOCK_SIZE) / (MINIFS_BLOCK_SIZE + 1))
+#define MINIFS_BLOCKS      (MINIFS_META_FREE - MINIFS_BITMAP_SECTORS)
 #define MINIFS_DIRECT      8
 #define MINIFS_INDIRECT_ENTRIES (MINIFS_BLOCK_SIZE / (int)sizeof(uint16_t))
 #define MINIFS_MAX_FILE_BLOCKS  (MINIFS_DIRECT + MINIFS_INDIRECT_ENTRIES)
@@ -36,7 +38,9 @@ struct minifs_inode {
     uint16_t indirect;
 };
 
-_Static_assert(MINIFS_BLOCKS <= MINIFS_BLOCK_SIZE, "minifs block bitmap must fit in one sector");
+_Static_assert(MINIFS_BITMAP_SECTORS > 0, "minifs needs bitmap sectors");
+_Static_assert(MINIFS_BLOCKS <= MINIFS_BITMAP_SECTORS * MINIFS_BLOCK_SIZE,
+               "minifs block bitmap must fit in reserved sectors");
 _Static_assert(sizeof(struct minifs_inode) <= MINIFS_BLOCK_SIZE, "minifs inode must fit in one sector");
 
 struct minifs_dirent_disk {
@@ -135,10 +139,17 @@ static int flush_inode(int ino) {
 
 static int flush_bitmap(void) {
     uint8_t sector[512];
-    zero(sector, sizeof(sector));
-    for (int i = 0; i < MINIFS_BLOCKS; i++)
-        sector[i] = block_used[i];
-    return block_write_sector(bitmap_lba(), sector);
+    for (int s = 0; s < MINIFS_BITMAP_SECTORS; s++) {
+        zero(sector, sizeof(sector));
+        for (int i = 0; i < MINIFS_BLOCK_SIZE; i++) {
+            int idx = s * MINIFS_BLOCK_SIZE + i;
+            if (idx < MINIFS_BLOCKS)
+                sector[i] = block_used[idx];
+        }
+        if (block_write_sector(bitmap_lba() + (uint32_t)s, sector) < 0)
+            return -1;
+    }
+    return 0;
 }
 
 static int read_block(int block, void *buf) {
@@ -423,7 +434,7 @@ static void format_fs(void) {
     sb.magic = MINIFS_MAGIC;
     sb.inode_count = MINIFS_INODES;
     sb.block_count = MINIFS_BLOCKS;
-    sb.data_lba = MINIFS_LBA_START + 1 + MINIFS_INODES + 1;
+    sb.data_lba = MINIFS_LBA_START + 1 + MINIFS_INODES + MINIFS_BITMAP_SECTORS;
     inodes[MINIFS_ROOT_INO].used = 1;
     inodes[MINIFS_ROOT_INO].type = MINIFS_DIR;
     inodes[MINIFS_ROOT_INO].parent = MINIFS_ROOT_INO;
@@ -463,12 +474,17 @@ int minifs_mount(void) {
             }
             inodes[i] = *(struct minifs_inode *)sector;
         }
-        if (block_read_sector(bitmap_lba(), sector) < 0) {
-            minifs_unlock();
-            return -1;
+        for (int s = 0; s < MINIFS_BITMAP_SECTORS; s++) {
+            if (block_read_sector(bitmap_lba() + (uint32_t)s, sector) < 0) {
+                minifs_unlock();
+                return -1;
+            }
+            for (int i = 0; i < MINIFS_BLOCK_SIZE; i++) {
+                int idx = s * MINIFS_BLOCK_SIZE + i;
+                if (idx < MINIFS_BLOCKS)
+                    block_used[idx] = sector[i];
+            }
         }
-        for (int i = 0; i < MINIFS_BLOCKS; i++)
-            block_used[i] = sector[i];
     }
     mounted = 1;
     serial_puts("[minifs] mounted /fs\n");

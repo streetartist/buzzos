@@ -11,119 +11,76 @@ struct app_seed_entry {
     int refresh;
 };
 
-static const char app_guidemo_manifest[] =
-    "name=GUIDEMO\n"
-    "kind=user-gui\n"
-    "version=1.0\n"
-    "summary=Textbox controls\n"
-    "exec=/fs/apps/guidemo\n"
-    "state=/fs/apps/guidemo.cfg\n"
-    "source=src/user/bin/guidemo.c\n"
-    "readme=/fs/apps/guidemo.txt\n";
+static const char app_textedit_manifest[] =
+    "name=TextEdit\n"
+    "kind=gui\n"
+    "version=1\n"
+    "summary=Plain text editor\n"
+    "exec=/fs/apps/textedit\n"
+    "state=/fs/textedit.txt\n"
+    "source=src/user/bin/textedit.c\n"
+    "readme=/fs/apps/textedit.readme\n";
 
-static const char app_guidemo_readme[] =
-    "BuzzOS user GUI sample\n"
+static const char app_textedit_readme[] =
+    "TextEdit is a BuzzOS GUI text editor.\n"
     "\n"
-    "Executable: /fs/apps/guidemo\n"
-    "Run: guidemo\n"
-    "GUI: open /bin/gui and select GUIDEMO under /FS/APPS\n"
+    "Open and Save use /fs/textedit.txt.\n";
+
+static const char app_textedit_seed[] =
+    "Welcome to BuzzOS TextEdit.\n"
     "\n"
-    "The program enters graphics mode from user space, draws controls,\n"
-    "implements a focused text input box, reads mouse/keyboard input,\n"
-    "and stores state in /fs/apps/guidemo.cfg.\n";
+    "This is a user-space GUI app running in a desktop window.\n";
 
-static const char app_notes_manifest[] =
-    "name=NOTES\n"
-    "kind=user-gui\n"
-    "version=1.0\n"
-    "summary=Multiline notes\n"
-    "exec=/fs/apps/notes\n"
-    "state=/fs/apps/notes.txt\n"
-    "source=src/user/bin/notes.c\n"
-    "readme=/fs/apps/notes.readme\n";
+static const char app_paint_manifest[] =
+    "name=Paint\n"
+    "kind=gui\n"
+    "version=1\n"
+    "summary=Bitmap paint app\n"
+    "exec=/fs/apps/paint\n"
+    "state=/fs/paint.seed\n"
+    "source=src/user/bin/paint.c\n"
+    "readme=/fs/apps/paint.readme\n";
 
-static const char app_notes_readme[] =
-    "BuzzOS Notes user GUI\n"
+static const char app_paint_readme[] =
+    "Paint is a BuzzOS GUI drawing app.\n"
     "\n"
-    "Executable: /fs/apps/notes\n"
-    "Run: notes\n"
-    "Data: /fs/apps/notes.txt\n"
+    "Tools: brush, eraser, line, rectangle, fill, color palette.\n";
+
+static const char app_paint_seed[] =
+    "Paint stores its canvas in memory for this version.\n";
+
+static const char app_calculator_manifest[] =
+    "name=Calculator\n"
+    "kind=gui\n"
+    "version=1\n"
+    "summary=Expression calculator\n"
+    "exec=/fs/apps/calculator\n"
+    "state=/fs/calculator.seed\n"
+    "source=src/user/bin/calculator.c\n"
+    "readme=/fs/apps/calculator.readme\n";
+
+static const char app_calculator_readme[] =
+    "Calculator is a BuzzOS GUI calculator.\n"
     "\n"
-    "This app demonstrates a multiline text editor in user space.\n"
-    "It draws its own text area, handles keyboard input, and saves to /fs.\n";
+    "It supports +, -, *, /, %, parentheses, decimals, and sqrt().\n";
 
-static const char app_notes_seed[] =
-    "hello from notes\n";
-
-static const char app_forms_manifest[] =
-    "name=FORMS\n"
-    "kind=user-gui\n"
-    "version=1.0\n"
-    "summary=Multi-field form\n"
-    "exec=/fs/apps/forms\n"
-    "state=/fs/apps/forms.cfg\n"
-    "source=src/user/bin/forms.c\n"
-    "readme=/fs/apps/forms.readme\n";
-
-static const char app_forms_readme[] =
-    "BuzzOS Forms user GUI\n"
-    "\n"
-    "Executable: /fs/apps/forms\n"
-    "Run: forms\n"
-    "Data: /fs/apps/forms.cfg\n"
-    "\n"
-    "This app demonstrates focused single-line text input fields,\n"
-    "mouse selection, keyboard editing, live preview, and saved form state.\n";
-
-static const char app_forms_seed[] =
-    "FORM1\n"
-    "BuzzOS\n"
-    "User GUI\n"
-    "forms@local\n"
-    "text input\n";
-
-static const char app_calc_manifest[] =
-    "name=CALC\n"
-    "kind=user-gui\n"
-    "version=1.0\n"
-    "summary=Textbox calculator\n"
-    "exec=/fs/apps/calc\n"
-    "state=/fs/apps/calc.cfg\n"
-    "source=src/user/bin/calc.c\n"
-    "readme=/fs/apps/calc.readme\n";
-
-static const char app_calc_readme[] =
-    "BuzzOS Calc user GUI\n"
-    "\n"
-    "Executable: /fs/apps/calc\n"
-    "Run: calc\n"
-    "Data: /fs/apps/calc.cfg\n"
-    "\n"
-    "This app demonstrates two focused text input boxes, keyboard cursor editing,\n"
-    "operation buttons, live result feedback, and saved calculator state.\n";
-
-static const char app_calc_seed[] =
-    "CALC1\n"
-    "12\n"
-    "7\n"
-    "+\n";
+static const char app_calculator_seed[] =
+    "Calculator has no persistent state yet.\n";
 
 static const struct app_seed_entry app_seed_entries[] = {
-    { "/fs/apps/guidemo", initrd_bin_guidemo_data, INITRD_BIN_GUIDEMO_SIZE, 1 },
-    { "/fs/apps/guidemo.app", app_guidemo_manifest, sizeof(app_guidemo_manifest) - 1, 1 },
-    { "/fs/apps/guidemo.txt", app_guidemo_readme, sizeof(app_guidemo_readme) - 1, 0 },
-    { "/fs/apps/notes", initrd_bin_notes_data, INITRD_BIN_NOTES_SIZE, 1 },
-    { "/fs/apps/notes.app", app_notes_manifest, sizeof(app_notes_manifest) - 1, 1 },
-    { "/fs/apps/notes.readme", app_notes_readme, sizeof(app_notes_readme) - 1, 0 },
-    { "/fs/apps/notes.txt", app_notes_seed, sizeof(app_notes_seed) - 1, 0 },
-    { "/fs/apps/forms", initrd_bin_forms_data, INITRD_BIN_FORMS_SIZE, 1 },
-    { "/fs/apps/forms.app", app_forms_manifest, sizeof(app_forms_manifest) - 1, 1 },
-    { "/fs/apps/forms.readme", app_forms_readme, sizeof(app_forms_readme) - 1, 0 },
-    { "/fs/apps/forms.cfg", app_forms_seed, sizeof(app_forms_seed) - 1, 0 },
-    { "/fs/apps/calc", initrd_bin_calc_data, INITRD_BIN_CALC_SIZE, 1 },
-    { "/fs/apps/calc.app", app_calc_manifest, sizeof(app_calc_manifest) - 1, 1 },
-    { "/fs/apps/calc.readme", app_calc_readme, sizeof(app_calc_readme) - 1, 0 },
-    { "/fs/apps/calc.cfg", app_calc_seed, sizeof(app_calc_seed) - 1, 0 },
+    { "/fs/apps/textedit", initrd_bin_textedit_data, INITRD_BIN_TEXTEDIT_SIZE, 1 },
+    { "/fs/apps/textedit.app", app_textedit_manifest, sizeof(app_textedit_manifest) - 1, 1 },
+    { "/fs/apps/textedit.readme", app_textedit_readme, sizeof(app_textedit_readme) - 1, 0 },
+    { "/fs/textedit.txt", app_textedit_seed, sizeof(app_textedit_seed) - 1, 0 },
+    { "/fs/apps/paint", initrd_bin_paint_data, INITRD_BIN_PAINT_SIZE, 1 },
+    { "/fs/apps/paint.app", app_paint_manifest, sizeof(app_paint_manifest) - 1, 1 },
+    { "/fs/apps/paint.readme", app_paint_readme, sizeof(app_paint_readme) - 1, 0 },
+    { "/fs/paint.seed", app_paint_seed, sizeof(app_paint_seed) - 1, 0 },
+    { "/fs/apps/calculator", initrd_bin_calculator_data, INITRD_BIN_CALCULATOR_SIZE, 1 },
+    { "/fs/apps/calculator.app", app_calculator_manifest, sizeof(app_calculator_manifest) - 1, 1 },
+    { "/fs/apps/calculator.readme", app_calculator_readme, sizeof(app_calculator_readme) - 1, 0 },
+    { "/fs/calculator.seed", app_calculator_seed, sizeof(app_calculator_seed) - 1, 0 },
 };
+static const size_t app_seed_entry_count = 12;
 
 #endif /* BUZZOS_APP_REGISTRY_H */

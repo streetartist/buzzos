@@ -4,16 +4,18 @@
 #include <stdint.h>
 
 /* Set up a page directory and page tables:
- *   - Identity-map 0x00000000 → 0x00000000 (first 8 MiB)
- *   - Map 0xC0000000 → 0x00000000 (first 8 MiB, higher-half alias)
+ *   - Identity-map 0x00000000 -> 0x00000000 (low managed memory)
+ *   - Map 0xC0000000 -> 0x00000000 (low managed memory alias)
  * Then enable paging (CR0.PG) and jump-call to flush the TLB.
  * After this call, virtual == physical for the bottom 8 MiB. */
 void paging_init(void);
+void paging_set_framebuffer(uintptr_t phys_addr, uint32_t size);
 uint32_t paging_current_cr3(void);
 uint32_t paging_kernel_cr3(void);
 void paging_switch(uint32_t cr3);
 uint32_t paging_create_user_space(void);
 void paging_destroy_user_space(uint32_t cr3);
+int paging_map_user_range(uint32_t va, uint32_t size);
 
 /* Page directory and table entry flags */
 enum {
@@ -23,6 +25,14 @@ enum {
     PAGE_WT       = 0x08,
     PAGE_CD       = 0x10,
     PAGE_LARGE    = 0x80,   /* 4 MiB page (PDE only) */
+};
+
+enum {
+    KERNEL_LOW_TABLES = 16u,
+    KERNEL_LOW_SIZE = KERNEL_LOW_TABLES * 0x00400000u,
+    KERNEL_FB_VIRT = 0x10000000u,
+    KERNEL_FB_TABLES = 4u,
+    KERNEL_FB_SIZE = KERNEL_FB_TABLES * 0x00400000u,
 };
 
 #endif /* BUZZOS_PAGING_H */

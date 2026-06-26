@@ -348,23 +348,20 @@ static int read_line(char *line, int size) {
 static void cmd_help(const char *topic) {
     topic = skip_spaces(topic);
     if (!topic[0]) {
-        puts("commands: ls cd pwd stat about health interfaces limits fsinfo fsstat fdstat cat mkdir rmdir touch write rm mv nano basm gui paint appmgr guishell guihelp apps guidemo notes forms calc ping wget tcptwotest dhcp netstat syncstat elfbadtest pipetest pipeedgetest pipeblocktest futextest futextimeouttest futexcanceltest futexblocktest threads exec wait kill ps echo sleep reboot help");
+        puts("commands: ls cd pwd stat about health interfaces limits fsinfo fsstat fdstat cat mkdir rmdir touch write rm mv nano basm gui apps ping wget tcptwotest dhcp netstat syncstat elfbadtest pipetest pipeedgetest pipeblocktest futextest futextimeouttest futexcanceltest futexblocktest threads exec wait kill ps echo sleep reboot help");
         puts("external: /bin/echo /bin/cat; pipeline: echo hello | cat");
         puts("topics: help apps | help gui | help files | help proc | help edit | help net | help pipes");
-        puts("quick start: about; health; fsinfo; gui; paint; appmgr; apps info forms; calc");
+        puts("quick start: about; health; fsinfo; gui");
         return;
     }
     if (strcmp(topic, "apps") == 0) {
-        puts("apps [list|info <name>|run <name>]");
-        puts("examples: apps info guidemo; apps run forms");
-        puts("shortcuts: guidemo notes forms calc");
+        puts("apps [list|info <name>]");
+        puts("GUI apps are launched through the desktop.");
         return;
     }
     if (strcmp(topic, "gui") == 0) {
-        puts("gui [apps|paint|shell|help] opens a GUI view directly");
-        puts("shortcuts: appmgr paint guishell guihelp");
-        puts("user gui demos: guidemo textbox, notes multiline, forms fields, calc inputs");
-        puts("Esc leaves the current GUI view; Ctrl-C exits GUI from manager");
+        puts("gui opens the desktop.");
+        puts("Desktop manages GUI windows and app launching.");
         return;
     }
     if (strcmp(topic, "files") == 0) {
@@ -525,7 +522,8 @@ static void cmd_exec(const char *args) {
         argc--;
     }
 
-    int pid = spawn_process_args(argv[0], argv, argc, bg ? 1 : 0);
+    int flags = SPAWN_FLAG_INHERIT_STDIO | (bg ? SPAWN_FLAG_SILENT : 0);
+    int pid = spawn_process_args(argv[0], argv, argc, flags);
     if (pid < 0) {
         puts("exec: failed");
         return;
@@ -551,7 +549,7 @@ static void cmd_nano(const char *path) {
     char *argv[2];
     argv[0] = "/bin/nano";
     argv[1] = (char *)path;
-    int pid = spawn_process_args("/bin/nano", argv, 2, 0);
+    int pid = spawn_process_args("/bin/nano", argv, 2, SPAWN_FLAG_INHERIT_STDIO);
     if (pid < 0) {
         puts("nano: failed");
         return;
@@ -585,7 +583,7 @@ static void cmd_basm(const char *args) {
     if (argn >= 2)
         argv[2] = argsv[1];
 
-    int pid = spawn_process_args("/bin/basm", argv, argn + 1, 0);
+    int pid = spawn_process_args("/bin/basm", argv, argn + 1, SPAWN_FLAG_INHERIT_STDIO);
     if (pid < 0) {
         puts("basm: failed");
         return;
@@ -598,7 +596,7 @@ static void cmd_basm(const char *args) {
 
 static void run_program_sync(const char *label, const char *path,
                              char **argv, int argc) {
-    int pid = spawn_process_args(path, argv, argc, 0);
+    int pid = spawn_process_args(path, argv, argc, SPAWN_FLAG_INHERIT_STDIO);
     if (pid < 0) {
         printf("%s: failed\n", label);
         return;
@@ -609,58 +607,11 @@ static void run_program_sync(const char *label, const char *path,
     printf("[%s] exited %d\n", label, status);
 }
 
-static int copy_first_arg(const char *args, char *out, int cap) {
-    args = skip_spaces(args);
-    int n = 0;
-    while (args[n] && args[n] != ' ' && n < cap - 1) {
-        out[n] = args[n];
-        n++;
-    }
-    out[n] = 0;
-    return n;
-}
-
-static void cmd_gui_view(const char *view, const char *label) {
-    char *argv[2];
-    argv[0] = "/bin/gui";
-    argv[1] = (char *)view;
-    run_program_sync(label, "/bin/gui", argv, 2);
-}
-
 static void cmd_gui(const char *args) {
-    char view[16];
-    char *argv[2];
+    (void)args;
+    char *argv[1];
     argv[0] = "/bin/gui";
-    int argc = 1;
-    if (copy_first_arg(args, view, sizeof(view)) > 0) {
-        argv[1] = view;
-        argc = 2;
-    }
-    run_program_sync("gui", "/bin/gui", argv, argc);
-}
-
-static void cmd_guidemo(void) {
-    char *argv[1];
-    argv[0] = "/fs/apps/guidemo";
-    run_program_sync("guidemo", "/fs/apps/guidemo", argv, 1);
-}
-
-static void cmd_notes(void) {
-    char *argv[1];
-    argv[0] = "/fs/apps/notes";
-    run_program_sync("notes", "/fs/apps/notes", argv, 1);
-}
-
-static void cmd_forms(void) {
-    char *argv[1];
-    argv[0] = "/fs/apps/forms";
-    run_program_sync("forms", "/fs/apps/forms", argv, 1);
-}
-
-static void cmd_calc(void) {
-    char *argv[1];
-    argv[0] = "/fs/apps/calc";
-    run_program_sync("calc", "/fs/apps/calc", argv, 1);
+    run_program_sync("gui", "/bin/gui", argv, 1);
 }
 
 struct app_meta {
@@ -835,27 +786,8 @@ static void cmd_apps(const char *args) {
         return;
     }
 
-    if (starts_with(args, "run ")) {
-        struct app_meta meta;
-        if (find_app(args + 4, &meta) < 0) {
-            puts("apps: not found");
-            return;
-        }
-        char *argv[1];
-        argv[0] = meta.path;
-        int pid = spawn_process_args(meta.path, argv, 1, 0);
-        if (pid < 0) {
-            puts("apps: run failed");
-            return;
-        }
-        int status = 0;
-        waitpid(pid, &status, 0);
-        printf("[apps] %s exited %d\n", meta.file, status);
-        return;
-    }
-
     if (args[0] && !starts_with(args, "list")) {
-        puts("apps: usage: apps [list|info <name>|run <name>]");
+        puts("apps: usage: apps [list|info <name>]");
         return;
     }
 
@@ -1871,14 +1803,6 @@ static void execute(char *line) {
     else if (starts_with(line, "basm")) cmd_basm("");
     else if (starts_with(line, "apps ")) cmd_apps(line + 5);
     else if (starts_with(line, "apps")) cmd_apps("");
-    else if (starts_with(line, "guidemo")) cmd_guidemo();
-    else if (starts_with(line, "notes")) cmd_notes();
-    else if (starts_with(line, "forms")) cmd_forms();
-    else if (starts_with(line, "calc")) cmd_calc();
-    else if (starts_with(line, "paint")) cmd_gui_view("paint", "paint");
-    else if (starts_with(line, "appmgr")) cmd_gui_view("apps", "appmgr");
-    else if (starts_with(line, "guishell")) cmd_gui_view("shell", "guishell");
-    else if (starts_with(line, "guihelp")) cmd_gui_view("help", "guihelp");
     else if (starts_with(line, "gui ")) cmd_gui(line + 3);
     else if (starts_with(line, "gui")) cmd_gui("");
     else if (starts_with(line, "exec ")) cmd_exec(line + 5);

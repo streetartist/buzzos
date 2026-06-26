@@ -1,9 +1,0 @@
-BuzzOS user GUI sample
-
-Executable: /fs/apps/guidemo
-Run: guidemo
-GUI: open /bin/gui and select GUIDEMO under /FS/APPS
-
-The program enters graphics mode from user space, draws controls,
-implements a focused text input box, reads mouse/keyboard input,
-and stores state in /fs/apps/guidemo.cfg.

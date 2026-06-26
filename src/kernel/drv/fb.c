@@ -1,0 +1,445 @@
+#include <stddef.h>
+#include "fb.h"
+#include "font_builtin.h"
+#include "paging.h"
+
+enum {
+    FB_FONT_W = KFONT_WIDTH,
+    FB_FONT_H = KFONT_HEIGHT,
+    FB_CONSOLE_FONT_W = KFONT_WIDTH,
+    FB_CONSOLE_FONT_H = KFONT_HEIGHT,
+    FB_CONSOLE_MAX_COLS = 220,
+    FB_CONSOLE_MAX_ROWS = 120,
+};
+
+static volatile uint8_t *fb_mem = (uint8_t *)KERNEL_FB_VIRT;
+static struct gfx_info fb_info;
+static int fb_ready;
+
+static uint16_t console_cols;
+static uint16_t console_rows;
+static uint16_t console_row;
+static uint16_t console_col;
+static uint8_t console_color = 0x0F;
+static uint8_t ansi_state;
+static int ansi_params[2];
+static int ansi_param_index;
+static int ansi_seen_digit;
+
+static char console_chars[FB_CONSOLE_MAX_ROWS][FB_CONSOLE_MAX_COLS];
+static uint8_t console_colors[FB_CONSOLE_MAX_ROWS][FB_CONSOLE_MAX_COLS];
+
+static uint32_t palette_rgb(uint8_t index) {
+    static const uint32_t base[25] = {
+        0x000000, 0x0000AA, 0x00AA00, 0x00AAAA,
+        0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+        0x555555, 0x5555FF, 0x55FF55, 0x55FFFF,
+        0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+        0x182848, 0x285080, 0x3868B0, 0x5088D8,
+        0x70B0F8, 0x207850, 0x48B870, 0x503820,
+        0x6C2C28
+    };
+    if (index < sizeof(base) / sizeof(base[0]))
+        return base[index];
+    if (index < 40) {
+        uint32_t v = (uint32_t)(32 + (index - 25) * 14);
+        return (v << 16) | (v << 8) | v;
+    }
+    {
+        uint8_t n = (uint8_t)(index - 40);
+        uint32_t r = (uint32_t)(n / 36u);
+        uint32_t g = (uint32_t)((n / 6u) % 6u);
+        uint32_t b = (uint32_t)(n % 6u);
+        r = r * 51u;
+        g = g * 51u;
+        b = b * 51u;
+        return (r << 16) | (g << 8) | b;
+    }
+}
+
+static void fb_store_rgb(int x, int y, uint32_t rgb) {
+    if (!fb_ready || x < 0 || y < 0 ||
+        x >= (int)fb_info.width || y >= (int)fb_info.height)
+        return;
+    volatile uint8_t *p = fb_mem + (uint32_t)y * fb_info.pitch;
+    if (fb_info.bpp == 32) {
+        ((volatile uint32_t *)p)[x] = rgb;
+    } else if (fb_info.bpp == 24) {
+        p += (uint32_t)x * 3u;
+        p[0] = (uint8_t)(rgb & 0xFFu);
+        p[1] = (uint8_t)((rgb >> 8) & 0xFFu);
+        p[2] = (uint8_t)((rgb >> 16) & 0xFFu);
+    } else if (fb_info.bpp == 16) {
+        uint16_t r = (uint16_t)((rgb >> 19) & 0x1Fu);
+        uint16_t g = (uint16_t)((rgb >> 10) & 0x3Fu);
+        uint16_t b = (uint16_t)((rgb >> 3) & 0x1Fu);
+        ((volatile uint16_t *)p)[x] = (uint16_t)((r << 11) | (g << 5) | b);
+    } else {
+        p[x] = (uint8_t)(rgb & 0xFFu);
+    }
+}
+
+static uint32_t blend_rgb(uint32_t fg, uint32_t bg, uint32_t alpha) {
+    uint32_t inv = 255u - alpha;
+    uint32_t rb = (((fg & 0x00FF00FFu) * alpha +
+                    (bg & 0x00FF00FFu) * inv) >> 8) & 0x00FF00FFu;
+    uint32_t g = (((fg & 0x0000FF00u) * alpha +
+                   (bg & 0x0000FF00u) * inv) >> 8) & 0x0000FF00u;
+    return rb | g;
+}
+
+static const uint8_t *font_alpha_for(char c) {
+    unsigned char ch = (unsigned char)c;
+    if (ch < KFONT_FIRST || ch >= KFONT_FIRST + KFONT_COUNT)
+        ch = '?';
+    return &kfont_alpha[ch - KFONT_FIRST][0][0];
+}
+
+static void draw_glyph(int x, int y, char c, uint8_t fg, int bg) {
+    const uint8_t *alpha = font_alpha_for(c);
+    uint32_t fg_rgb = palette_rgb(fg);
+    uint32_t bg_rgb = bg >= 0 ? palette_rgb((uint8_t)bg) : 0;
+    for (int py = 0; py < KFONT_HEIGHT; py++) {
+        for (int px = 0; px < KFONT_WIDTH; px++) {
+            uint8_t a = alpha[py * KFONT_WIDTH + px];
+            if (a == 0) {
+                if (bg >= 0)
+                    fb_store_rgb(x + px, y + py, bg_rgb);
+                continue;
+            }
+            uint32_t rgb = (bg >= 0 && a < 255) ?
+                           blend_rgb(fg_rgb, bg_rgb, a) : fg_rgb;
+            fb_store_rgb(x + px, y + py, rgb);
+        }
+    }
+}
+
+static void draw_cell(uint16_t r, uint16_t c) {
+    if (r >= console_rows || c >= console_cols)
+        return;
+    int x = c * FB_CONSOLE_FONT_W;
+    int y = r * FB_CONSOLE_FONT_H;
+    fb_fill_rect(x, y, FB_CONSOLE_FONT_W, FB_CONSOLE_FONT_H,
+                 console_colors[r][c] >> 4);
+    draw_glyph(x, y, console_chars[r][c],
+               console_colors[r][c] & 0x0F,
+               console_colors[r][c] >> 4);
+}
+
+static void console_sanitize(void) {
+    if (console_cols == 0 || console_cols > FB_CONSOLE_MAX_COLS)
+        console_cols = 1;
+    if (console_rows == 0 || console_rows > FB_CONSOLE_MAX_ROWS)
+        console_rows = 1;
+    if (console_col >= console_cols)
+        console_col = console_cols - 1;
+    if (console_row >= console_rows)
+        console_row = console_rows - 1;
+}
+
+static void fb_scroll_pixels_up(uint32_t pixels) {
+    if (!fb_ready || pixels == 0 || pixels >= fb_info.height)
+        return;
+    uint32_t src_y = pixels;
+    uint32_t copy_rows = fb_info.height - pixels;
+    uint32_t bytes = fb_info.pitch;
+    for (uint32_t y = 0; y < copy_rows; y++) {
+        volatile uint8_t *dst = fb_mem + y * fb_info.pitch;
+        volatile uint8_t *src = fb_mem + (src_y + y) * fb_info.pitch;
+        for (uint32_t i = 0; i < bytes; i++)
+            dst[i] = src[i];
+    }
+    fb_fill_rect(0, (int)copy_rows, (int)fb_info.width, (int)pixels,
+                 console_color >> 4);
+}
+
+static void ansi_reset(void) {
+    ansi_state = 0;
+    ansi_params[0] = 0;
+    ansi_params[1] = 0;
+    ansi_param_index = 0;
+    ansi_seen_digit = 0;
+}
+
+static int ansi_value_or_default(int value, int fallback) {
+    return value > 0 ? value : fallback;
+}
+
+static void console_set_cursor(int r, int c) {
+    console_sanitize();
+    if (r < 0) r = 0;
+    if (c < 0) c = 0;
+    if (r >= console_rows) r = console_rows - 1;
+    if (c >= console_cols) c = console_cols - 1;
+    console_row = (uint16_t)r;
+    console_col = (uint16_t)c;
+}
+
+static void console_clear_line_from_cursor(void) {
+    console_sanitize();
+    for (uint16_t c = console_col; c < console_cols; c++) {
+        console_chars[console_row][c] = ' ';
+        console_colors[console_row][c] = console_color;
+        draw_cell(console_row, c);
+    }
+}
+
+static int handle_ansi(char c) {
+    if (ansi_state == 0) {
+        if ((unsigned char)c == 0x1B) {
+            ansi_state = 1;
+            return 1;
+        }
+        return 0;
+    }
+    if (ansi_state == 1) {
+        if (c == '[') {
+            ansi_state = 2;
+            ansi_params[0] = 0;
+            ansi_params[1] = 0;
+            ansi_param_index = 0;
+            ansi_seen_digit = 0;
+        } else {
+            ansi_reset();
+        }
+        return 1;
+    }
+    if (ansi_state == 2) {
+        if (c >= '0' && c <= '9') {
+            if (ansi_param_index < 2)
+                ansi_params[ansi_param_index] =
+                    ansi_params[ansi_param_index] * 10 + (c - '0');
+            ansi_seen_digit = 1;
+            return 1;
+        }
+        if (c == ';') {
+            if (ansi_param_index < 1)
+                ansi_param_index++;
+            ansi_seen_digit = 0;
+            return 1;
+        }
+        int n = ansi_value_or_default(ansi_params[0], 1);
+        switch (c) {
+        case 'A': console_set_cursor((int)console_row - n, console_col); break;
+        case 'B': console_set_cursor((int)console_row + n, console_col); break;
+        case 'C': console_set_cursor(console_row, (int)console_col + n); break;
+        case 'D': console_set_cursor(console_row, (int)console_col - n); break;
+        case 'H':
+        case 'f':
+            console_set_cursor(ansi_value_or_default(ansi_params[0], 1) - 1,
+                               ansi_value_or_default(ansi_params[1], 1) - 1);
+            break;
+        case 'J':
+            if (ansi_params[0] == 2 || !ansi_seen_digit)
+                fb_console_clear();
+            break;
+        case 'K':
+            console_clear_line_from_cursor();
+            break;
+        default:
+            break;
+        }
+    }
+    ansi_reset();
+    return 1;
+}
+
+static void console_newline(void) {
+    console_sanitize();
+    console_col = 0;
+    if (++console_row < console_rows)
+        return;
+    if (console_rows == 0) {
+        console_row = 0;
+        return;
+    }
+    for (uint16_t r = 1; r < console_rows; r++) {
+        for (uint16_t c = 0; c < console_cols; c++) {
+            console_chars[r - 1][c] = console_chars[r][c];
+            console_colors[r - 1][c] = console_colors[r][c];
+        }
+    }
+    console_row = console_rows - 1;
+    for (uint16_t c = 0; c < console_cols; c++) {
+        console_chars[console_row][c] = ' ';
+        console_colors[console_row][c] = console_color;
+    }
+    fb_scroll_pixels_up(FB_CONSOLE_FONT_H);
+}
+
+void fb_set_framebuffer(uint64_t phys_addr, uint32_t width, uint32_t height,
+                        uint32_t pitch, uint32_t bpp) {
+    if (phys_addr > 0xFFFFFFFFull || !width || !height || !pitch)
+        return;
+    if (!(bpp == 8 || bpp == 16 || bpp == 24 || bpp == 32))
+        return;
+    if (pitch * height > KERNEL_FB_SIZE)
+        return;
+    fb_mem = (uint8_t *)(KERNEL_FB_VIRT + ((uint32_t)phys_addr & 0xFFFu));
+    fb_info.width = width;
+    fb_info.height = height;
+    fb_info.pitch = pitch;
+    fb_info.bpp = bpp;
+    fb_ready = 1;
+}
+
+void fb_init(void) {
+    if (!fb_ready) {
+        fb_info.width = 1;
+        fb_info.height = 1;
+        fb_info.pitch = 1;
+        fb_info.bpp = 8;
+    }
+    console_cols = (uint16_t)(fb_info.width / FB_CONSOLE_FONT_W);
+    console_rows = (uint16_t)(fb_info.height / FB_CONSOLE_FONT_H);
+    if (console_cols > FB_CONSOLE_MAX_COLS)
+        console_cols = FB_CONSOLE_MAX_COLS;
+    if (console_rows > FB_CONSOLE_MAX_ROWS)
+        console_rows = FB_CONSOLE_MAX_ROWS;
+    if (console_cols == 0)
+        console_cols = 1;
+    if (console_rows == 0)
+        console_rows = 1;
+    ansi_reset();
+    fb_console_clear();
+}
+
+void fb_set_color(uint8_t fg, uint8_t bg) {
+    console_color = (uint8_t)((bg << 4) | (fg & 0x0F));
+}
+
+void fb_get_info(struct gfx_info *out) {
+    if (out)
+        *out = fb_info;
+}
+
+int fb_set_mode(int mode) {
+    (void)mode;
+    return fb_ready ? 0 : -1;
+}
+
+int fb_clear(uint8_t color) {
+    if (!fb_ready)
+        return -1;
+    return fb_fill_rect(0, 0, (int)fb_info.width, (int)fb_info.height, color);
+}
+
+int fb_putpixel(int x, int y, uint8_t color) {
+    if (!fb_ready || x < 0 || y < 0 ||
+        x >= (int)fb_info.width || y >= (int)fb_info.height)
+        return -1;
+    fb_store_rgb(x, y, palette_rgb(color));
+    return 0;
+}
+
+int fb_fill_rect(int x, int y, int w, int h, uint8_t color) {
+    if (!fb_ready)
+        return -1;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)fb_info.width) w = (int)fb_info.width - x;
+    if (y + h > (int)fb_info.height) h = (int)fb_info.height - y;
+    if (w <= 0 || h <= 0)
+        return 0;
+    uint32_t rgb = palette_rgb(color);
+    for (int yy = 0; yy < h; yy++)
+        for (int xx = 0; xx < w; xx++)
+            fb_store_rgb(x + xx, y + yy, rgb);
+    return 0;
+}
+
+int fb_blit8(int x, int y, int w, int h, const uint8_t *pixels) {
+    if (!fb_ready || !pixels || x < 0 || y < 0 || w <= 0 || h <= 0)
+        return -1;
+    if (x + w > (int)fb_info.width || y + h > (int)fb_info.height)
+        return -1;
+    for (int yy = 0; yy < h; yy++) {
+        const uint8_t *src = pixels + yy * w;
+        for (int xx = 0; xx < w; xx++)
+            fb_store_rgb(x + xx, y + yy, palette_rgb(src[xx]));
+    }
+    return 0;
+}
+
+int fb_text(int x, int y, const char *s, uint8_t fg, int bg) {
+    if (!fb_ready || !s)
+        return -1;
+    int start_x = x;
+    while (*s) {
+        if (*s == '\n') {
+            x = start_x;
+            y += FB_FONT_H;
+            s++;
+            continue;
+        }
+        draw_glyph(x, y, *s++, fg, bg);
+        x += FB_FONT_W;
+    }
+    return 0;
+}
+
+void fb_console_clear(void) {
+    console_sanitize();
+    fb_clear(0);
+    for (uint16_t r = 0; r < console_rows; r++) {
+        for (uint16_t c = 0; c < console_cols; c++) {
+            console_chars[r][c] = ' ';
+            console_colors[r][c] = console_color;
+        }
+    }
+    console_row = 0;
+    console_col = 0;
+}
+
+void fb_console_putc(char c) {
+    console_sanitize();
+    if (handle_ansi(c))
+        return;
+    console_sanitize();
+    if (c == '\n') {
+        console_newline();
+        return;
+    }
+    if (c == '\r') {
+        console_col = 0;
+        return;
+    }
+    if (c == '\b') {
+        fb_console_backspace();
+        return;
+    }
+    if (c < 32)
+        return;
+    console_sanitize();
+    uint16_t row = console_row;
+    uint16_t col = console_col;
+    console_chars[row][col] = c;
+    console_colors[row][col] = console_color;
+    int x = (int)col * FB_CONSOLE_FONT_W;
+    int y = (int)row * FB_CONSOLE_FONT_H;
+    fb_fill_rect(x, y, FB_CONSOLE_FONT_W, FB_CONSOLE_FONT_H,
+                 console_color >> 4);
+    draw_glyph(x, y, c, console_color & 0x0F, console_color >> 4);
+    if (++console_col >= console_cols)
+        console_newline();
+}
+
+void fb_console_puts(const char *s) {
+    while (s && *s)
+        fb_console_putc(*s++);
+}
+
+void fb_console_backspace(void) {
+    console_sanitize();
+    if (console_col > 0) {
+        console_col--;
+    } else if (console_row > 0) {
+        console_row--;
+        console_col = console_cols - 1;
+    } else {
+        return;
+    }
+    console_chars[console_row][console_col] = ' ';
+    console_colors[console_row][console_col] = console_color;
+    draw_cell(console_row, console_col);
+}

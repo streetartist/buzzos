@@ -2,8 +2,10 @@ BUILD := build
 OBJDIR := $(BUILD)/obj/kernel
 IMAGE := $(BUILD)/buzzos.img
 KERNEL_SECTORS := 767
-FS_START_SECTOR := 768
-FS_SECTORS := 512
+BOOT_PARTITION_START := 2048
+BOOT_PARTITION_SECTORS := 65536
+FS_START_SECTOR := 67584
+FS_SECTORS := 4096
 FS_IMAGE ?= $(IMAGE)
 FS_TEST_IMAGE ?= $(BUILD)/buzzos-test.img
 FS_REPAIR_IMAGE ?= $(BUILD)/buzzos-repaired.img
@@ -44,11 +46,12 @@ KERNEL_SRCS := \
 	src/kernel/drv/mouse.c \
 	src/kernel/drv/timer.c \
 	src/kernel/drv/serial.c \
-	src/kernel/drv/vga.c \
+	src/kernel/drv/fb.c \
 	src/kernel/drv/reboot.c \
 	src/kernel/drv/ne2000.c
 
 KERNEL_ASMS := \
+	src/kernel/arch/i386/mb2_entry.asm \
 	src/kernel/arch/i386/isr.asm \
 	src/kernel/arch/i386/switch.asm \
 	src/kernel/arch/i386/setjmp.asm
@@ -63,6 +66,7 @@ LD   := ld.lld
 OBJCOPY := llvm-objcopy
 PYTHON ?= python
 QEMU ?= qemu-system-i386
+LIMINE_DIR ?= D:/limine-binary/limine-binary
 
 KERNEL_INCLUDES := \
 	-Isrc/kernel \
@@ -96,18 +100,19 @@ GUI_ELF := $(BUILD)/user/gui.elf
 FUTEXHOLD_ELF := $(BUILD)/user/futexhold.elf
 CAT_ELF := $(BUILD)/user/cat.elf
 ECHO_ELF := $(BUILD)/user/echo.elf
-GUI_APP_NAMES := guidemo notes forms calc
+GUI_APP_NAMES := textedit paint calculator
 GUI_APP_ELFS := $(foreach app,$(GUI_APP_NAMES),$(BUILD)/user/$(app).elf)
 GUI_APP_SRCS := $(foreach app,$(GUI_APP_NAMES),src/user/bin/$(app).c)
 USER_ELFS := $(USER_ELF) $(SHELL_ELF) $(NANO_ELF) $(BASM_ELF) $(GUI_ELF) $(FUTEXHOLD_ELF) $(CAT_ELF) $(ECHO_ELF) $(GUI_APP_ELFS)
 USER_SRCS := src/user/bin/hello.c src/user/bin/shell.c src/user/bin/nano.c src/user/bin/basm.c src/user/bin/gui.c src/user/bin/futexhold.c src/user/bin/cat.c src/user/bin/echo.c $(GUI_APP_SRCS)
-USER_LIB  := src/user/libc/crt0.c src/user/libc/libc.c
-USER_HEADERS := src/user/libc/libc.h src/user/libc/gui_style.h
+USER_LIB  := src/user/libc/crt0.c src/user/libc/libc.c src/user/libc/guiapp.c
+USER_HEADERS := src/user/libc/libc.h src/user/libc/guiapp.h src/user/libc/appui.h src/user/libc/gui_style.h src/kernel/drv/font_builtin.h
 INITRD_H := src/kernel/initrd.h
 APP_REGISTRY_H := src/kernel/app_registry.h
+FONT_H := src/kernel/drv/font_builtin.h
 GUI_APP_META := $(foreach app,$(GUI_APP_NAMES),$(wildcard src/user/bin/$(app).app src/user/bin/$(app).readme src/user/bin/$(app).seed))
 
-.PHONY: all clean help doctor run run-current run-local run-gui run-guidemo run-notes run-forms run-calc check-project app-check app-registry fs-check fs-ls fs-repair fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
+.PHONY: all clean help doctor run run-current run-local run-gui check-project app-check app-registry fs-check fs-ls fs-repair fs-check-smoke fs-check-negative fs-check-repair smoke gui-smoke report verify image-reset-fs new-app
 
 all: $(IMAGE)
 
@@ -136,6 +141,10 @@ $(OBJDIR)/net/net.o: src/kernel/net/net.h src/kernel/net/netdev.h src/kernel/sch
 $(OBJDIR)/core/elf.o: src/kernel/core/elf.h src/kernel/arch/i386/user_bounds.h
 $(OBJDIR)/arch/i386/paging.o: src/kernel/arch/i386/paging.h src/kernel/mm/pmm.h src/kernel/arch/i386/user_bounds.h
 $(OBJDIR)/mm/pmm.o: src/kernel/mm/pmm.h
+$(OBJDIR)/drv/fb.o: $(FONT_H)
+
+$(FONT_H): tools/gen_kernel_font.ps1
+	powershell -NoProfile -ExecutionPolicy Bypass -File tools/gen_kernel_font.ps1 -Out $(FONT_H)
 
 $(OBJDIR)/%.o-asm: src/kernel/%.asm | $(OBJDIR)
 	powershell -NoProfile -Command "New-Item -ItemType Directory -Force (Split-Path '$@' -Parent) | Out-Null"
@@ -150,25 +159,32 @@ $(OBJDIR)/kernel.elf: $(KERNEL_OBJS) linker.ld | $(OBJDIR)
 $(OBJDIR)/kernel.bin: $(OBJDIR)/kernel.elf
 	$(OBJCOPY) -O binary $< $@
 
-$(IMAGE): $(OBJDIR)/boot.bin $(OBJDIR)/kernel.bin tools/mkimage.ps1
-	powershell -NoProfile -ExecutionPolicy Bypass -File tools/mkimage.ps1 \
-		-Boot $(OBJDIR)/boot.bin -Kernel $(OBJDIR)/kernel.bin \
-		-Out $(IMAGE) -KernelSectors $(KERNEL_SECTORS) \
-		-FsStart $(FS_START_SECTOR) -FsSectors $(FS_SECTORS)
+$(IMAGE): $(OBJDIR)/kernel.elf tools/mkbootimg.py
+	$(PYTHON) tools/mkbootimg.py \
+		--kernel $(OBJDIR)/kernel.elf \
+		--out $(IMAGE) \
+		--limine-dir "$(LIMINE_DIR)" \
+		--boot-partition-start $(BOOT_PARTITION_START) \
+		--boot-partition-sectors $(BOOT_PARTITION_SECTORS) \
+		--fs-start $(FS_START_SECTOR) \
+		--fs-sectors $(FS_SECTORS)
 
 # GCC-compiled user program → initrd
 $(BUILD)/user:
 	powershell -NoProfile -Command "New-Item -ItemType Directory -Force '$(BUILD)/user' | Out-Null"
 
-$(BUILD)/user/user.ld: | $(BUILD)/user
+$(BUILD)/user/user.ld: Makefile | $(BUILD)/user
 	@echo 'ENTRY(_start)' > $@
-	@echo 'SECTIONS { . = 0x200000; .text : { *(.text.entry) *(.text*) } .rodata : { *(.rodata*) } .data : { *(.data*) } .bss : { *(.bss*) *(COMMON) } }' >> $@
+	@echo 'SECTIONS { . = 0x02000000; .text : { *(.text.entry) *(.text*) } .rodata : { *(.rodata*) } .data : { *(.data*) } .bss : { *(.bss*) *(COMMON) } }' >> $@
 
 $(BUILD)/user/crt0.o: src/user/libc/crt0.c src/user/libc/libc.h | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c src/user/libc/crt0.c -o $(BUILD)/user/crt0.o
 
 $(BUILD)/user/libc.o: src/user/libc/libc.c src/user/libc/libc.h | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c src/user/libc/libc.c -o $(BUILD)/user/libc.o
+
+$(BUILD)/user/guiapp.o: src/user/libc/guiapp.c src/user/libc/guiapp.h src/user/libc/libc.h | $(BUILD)/user
+	$(CC) $(UCFLAGS) -c src/user/libc/guiapp.c -o $(BUILD)/user/guiapp.o
 
 $(BUILD)/user/hello.o: src/user/bin/hello.c src/user/libc/libc.h | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c src/user/bin/hello.c -o $(BUILD)/user/hello.o
@@ -182,40 +198,40 @@ $(BUILD)/user/nano.o: src/user/bin/nano.c src/user/libc/libc.h | $(BUILD)/user
 $(BUILD)/user/basm.o: src/user/bin/basm.c src/user/libc/libc.h | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c src/user/bin/basm.c -o $(BUILD)/user/basm.o
 
-$(BUILD)/user/gui.o: src/user/bin/gui.c src/user/libc/libc.h | $(BUILD)/user
+$(BUILD)/user/gui.o: src/user/bin/gui.c $(USER_HEADERS) | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c src/user/bin/gui.c -o $(BUILD)/user/gui.o
 
 $(BUILD)/user/%.o: src/user/bin/%.c $(USER_HEADERS) | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c $< -o $@
 
-$(USER_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/hello.o $(BUILD)/user/user.ld | $(BUILD)/user
+$(USER_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/hello.o $(BUILD)/user/user.ld | $(BUILD)/user
 	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
-		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/hello.o
+		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/hello.o
 	$(OBJCOPY) --strip-sections $@
 
-$(SHELL_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/shell.o $(BUILD)/user/user.ld | $(BUILD)/user
+$(SHELL_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/shell.o $(BUILD)/user/user.ld | $(BUILD)/user
 	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
-		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/shell.o
+		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/shell.o
 	$(OBJCOPY) --strip-sections $@
 
-$(NANO_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/nano.o $(BUILD)/user/user.ld | $(BUILD)/user
+$(NANO_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/nano.o $(BUILD)/user/user.ld | $(BUILD)/user
 	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
-		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/nano.o
+		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/nano.o
 	$(OBJCOPY) --strip-sections $@
 
-$(BASM_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/basm.o $(BUILD)/user/user.ld | $(BUILD)/user
+$(BASM_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/basm.o $(BUILD)/user/user.ld | $(BUILD)/user
 	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
-		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/basm.o
+		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/basm.o
 	$(OBJCOPY) --strip-sections $@
 
-$(GUI_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/gui.o $(BUILD)/user/user.ld | $(BUILD)/user
+$(GUI_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/gui.o $(BUILD)/user/user.ld | $(BUILD)/user
 	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
-		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/gui.o
+		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/gui.o
 	$(OBJCOPY) --strip-sections $@
 
-$(BUILD)/user/%.elf: $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/%.o $(BUILD)/user/user.ld | $(BUILD)/user
+$(BUILD)/user/%.elf: $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/%.o $(BUILD)/user/user.ld | $(BUILD)/user
 	$(LD) -m elf_i386 -T $(BUILD)/user/user.ld -nostdlib -o $@ \
-		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/$*.o
+		$(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/guiapp.o $(BUILD)/user/$*.o
 	$(OBJCOPY) --strip-sections $@
 
 $(INITRD_H): $(USER_ELFS) tools/mkinitrd.py
@@ -235,29 +251,17 @@ doctor:
 	$(PYTHON) tools/doctor.py --python "$(PYTHON)" --make "$(MAKE)" --qemu "$(QEMU)"
 
 run: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE) -serial stdio -no-reboot -netdev user,id=n0 -device ne2k_isa,netdev=n0,iobase=0x300,irq=10
+	$(QEMU) -drive format=raw,file=$(IMAGE) -serial stdio -no-reboot -vga std -netdev user,id=n0 -device ne2k_isa,netdev=n0,iobase=0x300,irq=10
 
 run-current:
 	powershell -NoProfile -Command "if (!(Test-Path '$(IMAGE)')) { throw '$(IMAGE) does not exist. Run make first.' }"
-	$(QEMU) -drive format=raw,file=$(IMAGE) -serial stdio -no-reboot -netdev user,id=n0 -device ne2k_isa,netdev=n0,iobase=0x300,irq=10
+	$(QEMU) -drive format=raw,file=$(IMAGE) -serial stdio -no-reboot -vga std -netdev user,id=n0 -device ne2k_isa,netdev=n0,iobase=0x300,irq=10
 
 run-local:
 	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)"
 
 run-gui:
 	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command gui
-
-run-guidemo:
-	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command guidemo
-
-run-notes:
-	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command notes
-
-run-forms:
-	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command forms
-
-run-calc:
-	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-local.ps1 -Qemu "$(QEMU)" -Command calc
 
 check-project: $(IMAGE)
 	$(PYTHON) tools/check_project.py
@@ -297,11 +301,16 @@ report: $(IMAGE)
 
 verify: check-project smoke fs-check-smoke fs-check-negative fs-check-repair gui-smoke
 
-image-reset-fs: $(OBJDIR)/boot.bin $(OBJDIR)/kernel.bin tools/mkimage.ps1
-	powershell -NoProfile -ExecutionPolicy Bypass -File tools/mkimage.ps1 \
-		-Boot $(OBJDIR)/boot.bin -Kernel $(OBJDIR)/kernel.bin \
-		-Out $(IMAGE) -KernelSectors $(KERNEL_SECTORS) \
-		-FsStart $(FS_START_SECTOR) -FsSectors $(FS_SECTORS) -ResetFs
+image-reset-fs: $(OBJDIR)/kernel.elf tools/mkbootimg.py
+	$(PYTHON) tools/mkbootimg.py \
+		--kernel $(OBJDIR)/kernel.elf \
+		--out $(IMAGE) \
+		--limine-dir "$(LIMINE_DIR)" \
+		--boot-partition-start $(BOOT_PARTITION_START) \
+		--boot-partition-sectors $(BOOT_PARTITION_SECTORS) \
+		--fs-start $(FS_START_SECTOR) \
+		--fs-sectors $(FS_SECTORS) \
+		--reset-fs
 
 new-app:
 	$(PYTHON) tools/new_app.py $(APP)

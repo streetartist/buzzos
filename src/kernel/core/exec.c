@@ -71,6 +71,13 @@ int exec_start_args_with_fds(const uint8_t *elf_data, size_t elf_size, const cha
 
     __asm__ volatile("cli");
     paging_switch(proc_cr3);
+    if (paging_map_user_range(USER_DEFAULT_STACK_TOP - 0x10000u, 0x10000u) < 0) {
+        paging_switch(old_cr3);
+        __asm__ volatile("sti");
+        paging_destroy_user_space(proc_cr3);
+        serial_puts("[exec] out of user stack pages\n");
+        return -1;
+    }
     uint32_t entry = elf_load(elf_data, elf_size);
     uint32_t stack = build_user_stack(argc, argv);
     paging_switch(old_cr3);

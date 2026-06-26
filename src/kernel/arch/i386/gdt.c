@@ -44,6 +44,8 @@ static void gdt_set_entry(int index, uint32_t base, uint32_t limit,
 
 static void load_kernel_segments(void) {
     __asm__ volatile(
+        "ljmp $0x08, $1f\n"
+        "1:\n"
         "movw %0, %%ax\n"
         "movw %%ax, %%ds\n"
         "movw %%ax, %%es\n"

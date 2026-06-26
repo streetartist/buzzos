@@ -6,8 +6,8 @@
 #include "vfs.h"
 
 enum {
-    MINIFS_LBA_START = 768,
-    MINIFS_SECTORS = 512,
+    MINIFS_LBA_START = 67584,
+    MINIFS_SECTORS = 4096,
 };
 
 struct fs_info {

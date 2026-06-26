@@ -45,6 +45,32 @@ static inline int ui_inside(int x, int y, int rx, int ry, int rw, int rh) {
     return x >= rx && y >= ry && x < rx + rw && y < ry + rh;
 }
 
+static inline void ui_center_origin(int design_w, int design_h,
+                                    struct gfx_info *screen_out) {
+    struct gfx_info info;
+    if (gfx_info(&info) < 0) {
+        gfx_set_origin(0, 0);
+        if (screen_out) {
+            screen_out->width = design_w;
+            screen_out->height = design_h;
+            screen_out->pitch = design_w;
+            screen_out->bpp = 8;
+        }
+        return;
+    }
+    {
+        int ox = 0;
+        int oy = 0;
+        if ((int)info.width > design_w)
+            ox = ((int)info.width - design_w) / 2;
+        if ((int)info.height > design_h)
+            oy = ((int)info.height - design_h) / 2;
+        gfx_set_origin(ox, oy);
+    }
+    if (screen_out)
+        *screen_out = info;
+}
+
 static inline void ui_border(int x, int y, int w, int h, int light, int dark) {
     gfx_fill_rect(x, y, w, 1, light);
     gfx_fill_rect(x, y, 1, h, light);

@@ -1,8 +1,0 @@
-BuzzOS Calc user GUI
-
-Executable: /fs/apps/calc
-Run: calc
-Data: /fs/apps/calc.cfg
-
-This app demonstrates two focused text input boxes, keyboard cursor editing,
-operation buttons, live result feedback, and saved calculator state.

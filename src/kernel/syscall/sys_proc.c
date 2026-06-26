@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "exec.h"
+#include "paging.h"
 #include "reboot.h"
 #include "serial.h"
 #include "syscall_internal.h"
@@ -35,7 +36,7 @@ static void copy_user_cstr_256(char *dst, const char *src) {
 }
 
 static int spawn_proc_common_locked(const char *path, int flags, int argc, const char *const argv[]) {
-    static uint8_t elf_buf[65536];
+    static uint8_t elf_buf[262144];
 
     int fd = vfs_open_flags(path, O_RDONLY);
     if (fd < 0)
@@ -172,7 +173,9 @@ int sys_spawn(uint32_t func_addr, uint32_t b, uint32_t c, uint32_t d, uint32_t e
 
     int slot = ++process_thread_count[owner];
     uint32_t user_stack = USER_DEFAULT_STACK_TOP - (uint32_t)(slot * 0x4000);
-    if (user_stack < 0x001C0004)
+    if (user_stack < USER_SPACE_START + 4)
+        return -1;
+    if (paging_map_user_range(user_stack - 0x4000u, 0x4000u) < 0)
         return -1;
     user_stack -= 4;
     *(uint32_t *)(uintptr_t)user_stack = return_addr;

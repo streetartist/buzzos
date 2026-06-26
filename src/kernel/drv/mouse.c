@@ -1,6 +1,6 @@
 #include "io.h"
+#include "fb.h"
 #include "mouse.h"
-#include "vga.h"
 
 enum {
     PS2_DATA = 0x60,
@@ -23,6 +23,19 @@ static volatile int mouse_enabled;
 static uint8_t packet[4];
 static int packet_index;
 static int packet_size;
+
+static void mouse_screen_bounds(int *w_out, int *h_out) {
+    struct gfx_info info;
+    fb_get_info(&info);
+    if (info.width == 0)
+        info.width = 1;
+    if (info.height == 0)
+        info.height = 1;
+    if (w_out)
+        *w_out = (int)info.width;
+    if (h_out)
+        *h_out = (int)info.height;
+}
 
 static int ps2_wait_write(void) {
     for (int i = 0; i < 100000; i++) {
@@ -167,8 +180,11 @@ static void unmask_irq12(void) {
 }
 
 void mouse_init(void) {
-    mouse_x = VGA_GFX_WIDTH / 2;
-    mouse_y = VGA_GFX_HEIGHT / 2;
+    int screen_w = 1;
+    int screen_h = 1;
+    mouse_screen_bounds(&screen_w, &screen_h);
+    mouse_x = screen_w / 2;
+    mouse_y = screen_h / 2;
     mouse_buttons = 0;
     mouse_dx = 0;
     mouse_dy = 0;
@@ -262,8 +278,13 @@ void mouse_handler(uint8_t byte) {
     int y = mouse_y - dy;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
-    if (x >= VGA_GFX_WIDTH) x = VGA_GFX_WIDTH - 1;
-    if (y >= VGA_GFX_HEIGHT) y = VGA_GFX_HEIGHT - 1;
+    {
+        int screen_w = 1;
+        int screen_h = 1;
+        mouse_screen_bounds(&screen_w, &screen_h);
+        if (x >= screen_w) x = screen_w - 1;
+        if (y >= screen_h) y = screen_h - 1;
+    }
 
     mouse_x = x;
     mouse_y = y;

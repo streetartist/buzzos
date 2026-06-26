@@ -13,7 +13,7 @@
 #define FS_FILE_BUFSZ 2048
 #define MAX_MOUNTS    8
 #define MAX_PIPES     16
-#define PIPE_BUFSZ    512
+#define PIPE_BUFSZ    8192
 
 enum {
     PIPE_READ_END = 1,

@@ -6,7 +6,7 @@
 /* ------------------------------------------------------------------ */
 
 #define MAX_PAGES          65536      /* bitmap capacity: 256 MiB */
-#define PMM_MANAGED_LIMIT  0x00800000u /* current paging maps low 8 MiB */
+#define PMM_MANAGED_LIMIT  0x04000000u /* current paging maps low 64 MiB */
 #define PMM_MANAGED_PAGES  (PMM_MANAGED_LIMIT / PAGE_SIZE)
 #define BITMAP_WORDS       (MAX_PAGES / 32)
 #define PAGE_MASK          ((uint64_t)PAGE_SIZE - 1u)
@@ -125,10 +125,8 @@ void pmm_init(void) {
      * later kernel stacks. */
     mark_range(0x006F0000, 0x00010000, 1);
 
-    /* User processes use 0x001C0000..0x00280000 as private virtual memory.
-     * Do not allocate physical kernel objects there, or those virtual
-     * addresses will alias user pages after a CR3 switch. */
-    mark_range(0x001C0000, 0x00280000 - 0x001C0000, 1);
+    /* Ring-3 entry trampoline lives here and is patched per process. */
+    mark_range(0x001FF000, 0x1000, 1);
 
     /* Reserve first 4 KiB (IVT / BDA) */
     mark_range(0, 0x1000, 1);

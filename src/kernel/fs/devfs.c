@@ -1,4 +1,5 @@
 #include "keyboard.h"
+#include "fb.h"
 #include "serial.h"
 #include "vfs_internal.h"
 
@@ -70,8 +71,6 @@ static const struct vnode_ops serial_dev_ops = {
     .close = serial_close,
 };
 
-extern void vga_putc(char c);
-
 static int console_open(vnode_t *vn)  { (void)vn; return 0; }
 static int console_close(vnode_t *vn) { (void)vn; return 0; }
 
@@ -93,7 +92,7 @@ static int console_write(vnode_t *vn, const void *buf, size_t count) {
     const uint8_t *p = (const uint8_t *)buf;
     for (size_t i = 0; i < count; i++) {
         serial_putc((char)p[i]);
-        vga_putc((char)p[i]);
+        fb_console_putc((char)p[i]);
     }
     return (int)count;
 }

@@ -1,8 +1,0 @@
-BuzzOS Forms user GUI
-
-Executable: /fs/apps/forms
-Run: forms
-Data: /fs/apps/forms.cfg
-
-This app demonstrates focused single-line text input fields,
-mouse selection, keyboard editing, live preview, and saved form state.
