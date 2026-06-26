@@ -40,6 +40,25 @@ Left/Right/Home/End/Delete editing, and saved state in `/fs/apps/forms.cfg`.
 operation buttons, keyboard editing, result feedback, and saved state in
 `/fs/apps/calc.cfg`.
 
+## Unified UI Style
+
+The seeded user GUI apps share a small style helper in
+`src/user/libc/gui_style.h`. It keeps the apps visually consistent without
+turning the GUI layer into a large framework:
+
+```text
+ui_topbar
+ui_panel
+ui_button
+ui_field
+ui_textbox
+ui_pointer
+```
+
+New small GUI apps should use these shared helpers for top bars, panels,
+buttons, text boxes, focus/hover borders, pointer drawing, and status colors.
+App-specific layout and behavior still live in each app source file.
+
 ## Run It
 
 From the host, open the GUI manager or a specific seeded app directly:

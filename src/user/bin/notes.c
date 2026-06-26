@@ -1,4 +1,5 @@
 #include "libc.h"
+#include "gui_style.h"
 
 #define CTRL_C 0x03
 #define CTRL_S 0x13
@@ -47,13 +48,6 @@ static int inside(int x, int y, int rx, int ry, int rw, int rh) {
     return x >= rx && y >= ry && x < rx + rw && y < ry + rh;
 }
 
-static void border(int x, int y, int w, int h, int light, int dark) {
-    gfx_fill_rect(x, y, w, 1, light);
-    gfx_fill_rect(x, y, 1, h, light);
-    gfx_fill_rect(x, y + h - 1, w, 1, dark);
-    gfx_fill_rect(x + w - 1, y, 1, h, dark);
-}
-
 static void set_status_saved(void) {
     dirty = 0;
     flash = 80;
@@ -95,13 +89,6 @@ static void note_save(void) {
     close(fd);
     if (n >= 0)
         set_status_saved();
-}
-
-static void button(int x, int y, int w, int h, const char *label) {
-    int hot = inside(pointer_x, pointer_y, x, y, w, h);
-    gfx_fill_rect(x, y, w, h, hot ? 15 : 7);
-    border(x, y, w, h, hot ? 14 : 15, 8);
-    gfx_text(x + 7, y + 4, label, 1, -1);
 }
 
 static int read_key_poll(void) {
@@ -192,18 +179,6 @@ static void handle_mouse(void) {
     prev_left = left;
 }
 
-static void draw_pointer(void) {
-    int x = pointer_x;
-    int y = pointer_y;
-    gfx_fill_rect(x, y, 1, 13, 0);
-    gfx_fill_rect(x + 1, y + 1, 1, 11, 0);
-    gfx_fill_rect(x + 2, y + 2, 1, 9, 15);
-    gfx_fill_rect(x + 3, y + 3, 1, 7, 15);
-    gfx_fill_rect(x + 4, y + 4, 1, 5, 15);
-    gfx_fill_rect(x + 5, y + 5, 1, 3, 0);
-    gfx_fill_rect(x, y + 13, 5, 1, 0);
-}
-
 static void draw_note_text(void) {
     int row = 0;
     int col = 0;
@@ -256,32 +231,27 @@ static void draw_status(void) {
 }
 
 static void draw(void) {
-    gfx_clear(18);
-    gfx_fill_rect(0, 0, SW, TOP_H, 1);
-    gfx_fill_rect(0, TOP_H - 1, SW, 1, 8);
-    gfx_text(5, 3, "NOTES", 15, -1);
-    gfx_fill_rect(EXIT_X, EXIT_Y, EXIT_W, EXIT_H,
-                  inside(pointer_x, pointer_y, EXIT_X, EXIT_Y, EXIT_W, EXIT_H) ? 14 : 12);
-    border(EXIT_X, EXIT_Y, EXIT_W, EXIT_H, 15, 0);
-    gfx_text(EXIT_X + 6, EXIT_Y + 1, "EXIT", 15, -1);
-
-    gfx_fill_rect(6, 18, 308, 176, 7);
-    border(6, 18, 308, 176, 15, 0);
-    gfx_fill_rect(7, 19, 306, 10, 11);
-    gfx_text(12, 21, "MULTILINE TEXT INPUT", 15, -1);
+    gfx_clear(UI_BG);
+    ui_topbar("NOTES",
+              inside(pointer_x, pointer_y, EXIT_X, EXIT_Y, EXIT_W, EXIT_H));
+    ui_panel(6, 18, 308, 176, "MULTILINE TEXT INPUT", UI_ACCENT_ALT);
 
     gfx_text(10, 33, "EDITOR", 1, -1);
-    gfx_fill_rect(EDIT_X, EDIT_Y, EDIT_W, EDIT_H, 15);
-    border(EDIT_X, EDIT_Y, EDIT_W, EDIT_H, focused ? 14 : 15, focused ? 1 : 8);
+    ui_field(EDIT_X, EDIT_Y, EDIT_W, EDIT_H,
+             inside(pointer_x, pointer_y, EDIT_X, EDIT_Y, EDIT_W, EDIT_H),
+             focused);
     draw_note_text();
 
-    button(SAVE_X, BTN_Y, BTN_W, BTN_H, "SAVE");
-    button(LOAD_X, BTN_Y, BTN_W, BTN_H, "LOAD");
-    button(CLEAR_X, BTN_Y, BTN_W, BTN_H, "CLEAR");
+    ui_button(SAVE_X, BTN_Y, BTN_W, BTN_H, "SAVE",
+              inside(pointer_x, pointer_y, SAVE_X, BTN_Y, BTN_W, BTN_H), 0);
+    ui_button(LOAD_X, BTN_Y, BTN_W, BTN_H, "LOAD",
+              inside(pointer_x, pointer_y, LOAD_X, BTN_Y, BTN_W, BTN_H), 0);
+    ui_button(CLEAR_X, BTN_Y, BTN_W, BTN_H, "CLEAR",
+              inside(pointer_x, pointer_y, CLEAR_X, BTN_Y, BTN_W, BTN_H), 0);
     gfx_text(194, 158, "CTRL-S SAVE", 1, -1);
     gfx_text(194, 169, "ESC EXIT", 1, -1);
     draw_status();
-    draw_pointer();
+    ui_pointer(pointer_x, pointer_y);
 }
 
 int main(int argc, char **argv) {

@@ -102,6 +102,7 @@ GUI_APP_SRCS := $(foreach app,$(GUI_APP_NAMES),src/user/bin/$(app).c)
 USER_ELFS := $(USER_ELF) $(SHELL_ELF) $(NANO_ELF) $(BASM_ELF) $(GUI_ELF) $(FUTEXHOLD_ELF) $(CAT_ELF) $(ECHO_ELF) $(GUI_APP_ELFS)
 USER_SRCS := src/user/bin/hello.c src/user/bin/shell.c src/user/bin/nano.c src/user/bin/basm.c src/user/bin/gui.c src/user/bin/futexhold.c src/user/bin/cat.c src/user/bin/echo.c $(GUI_APP_SRCS)
 USER_LIB  := src/user/libc/crt0.c src/user/libc/libc.c
+USER_HEADERS := src/user/libc/libc.h src/user/libc/gui_style.h
 INITRD_H := src/kernel/initrd.h
 APP_REGISTRY_H := src/kernel/app_registry.h
 GUI_APP_META := $(foreach app,$(GUI_APP_NAMES),$(wildcard src/user/bin/$(app).app src/user/bin/$(app).readme src/user/bin/$(app).seed))
@@ -181,7 +182,7 @@ $(BUILD)/user/basm.o: src/user/bin/basm.c src/user/libc/libc.h | $(BUILD)/user
 $(BUILD)/user/gui.o: src/user/bin/gui.c src/user/libc/libc.h | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c src/user/bin/gui.c -o $(BUILD)/user/gui.o
 
-$(BUILD)/user/%.o: src/user/bin/%.c src/user/libc/libc.h | $(BUILD)/user
+$(BUILD)/user/%.o: src/user/bin/%.c $(USER_HEADERS) | $(BUILD)/user
 	$(CC) $(UCFLAGS) -c $< -o $@
 
 $(USER_ELF): $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/hello.o $(BUILD)/user/user.ld | $(BUILD)/user

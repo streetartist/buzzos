@@ -1,4 +1,5 @@
 #include "libc.h"
+#include "gui_style.h"
 
 #define CTRL_C 0x03
 #define CFG_PATH "/fs/apps/guidemo.cfg"
@@ -206,53 +207,11 @@ static void save_state(void) {
     }
 }
 
-static void border(int x, int y, int w, int h, int light, int dark) {
-    gfx_fill_rect(x, y, w, 1, light);
-    gfx_fill_rect(x, y, 1, h, light);
-    gfx_fill_rect(x, y + h - 1, w, 1, dark);
-    gfx_fill_rect(x + w - 1, y, 1, h, dark);
-}
-
-static void button(int x, int y, int w, int h, const char *label, int active) {
-    int hot = inside(pointer_x, pointer_y, x, y, w, h);
-    int fill = active ? 9 : (hot ? 15 : 7);
-    int fg = active ? 15 : 1;
-    gfx_fill_rect(x, y, w, h, fill);
-    border(x, y, w, h, hot ? 14 : 15, active ? 0 : 8);
-    gfx_text(x + 6, y + 5, label, fg, -1);
-}
-
-static void text_clip(int x, int y, const char *s, int chars, int fg, int bg) {
-    char tmp[32];
-    int i = 0;
-    while (s && s[i] && i < chars && i < (int)sizeof(tmp) - 1) {
-        tmp[i] = s[i];
-        i++;
-    }
-    tmp[i] = 0;
-    gfx_text(x, y, tmp, fg, bg);
-}
-
 static void draw_textbox(void) {
     int hot = inside(pointer_x, pointer_y, INPUT_X, INPUT_Y, INPUT_W, INPUT_H);
-    gfx_text(INPUT_X, INPUT_Y - 11, "TEXT INPUT", 1, -1);
-    gfx_fill_rect(INPUT_X, INPUT_Y, INPUT_W, INPUT_H, 15);
-    border(INPUT_X, INPUT_Y, INPUT_W, INPUT_H,
-           input_focused ? 14 : (hot ? 11 : 15),
-           input_focused ? 1 : 8);
-
-    if (input_len == 0 && !input_focused) {
-        gfx_text(INPUT_X + 5, INPUT_Y + 5, "TYPE HERE", 8, -1);
-    } else {
-        text_clip(INPUT_X + 5, INPUT_Y + 5, input_text, INPUT_MAX, 1, -1);
-    }
-
-    if (input_focused && ((frame / 20u) & 1u) == 0u) {
-        int cx = INPUT_X + 5 + input_cursor * 6;
-        if (cx > INPUT_X + INPUT_W - 5)
-            cx = INPUT_X + INPUT_W - 5;
-        gfx_fill_rect(cx, INPUT_Y + 4, 1, 9, 1);
-    }
+    ui_textbox(INPUT_X, INPUT_Y, INPUT_W, INPUT_H, "TEXT INPUT",
+               input_text, "TYPE HERE", INPUT_MAX, hot, input_focused,
+               input_cursor, frame);
 }
 
 static int read_byte_poll(void) {
@@ -440,41 +399,25 @@ static void handle_mouse(void) {
     prev_left = left;
 }
 
-static void draw_pointer(void) {
-    int x = pointer_x;
-    int y = pointer_y;
-    gfx_fill_rect(x, y, 1, 13, 0);
-    gfx_fill_rect(x + 1, y + 1, 1, 11, 0);
-    gfx_fill_rect(x + 2, y + 2, 1, 9, 15);
-    gfx_fill_rect(x + 3, y + 3, 1, 7, 15);
-    gfx_fill_rect(x + 4, y + 4, 1, 5, 15);
-    gfx_fill_rect(x + 5, y + 5, 1, 3, 0);
-    gfx_fill_rect(x, y + 13, 5, 1, 0);
-}
-
 static void draw_demo(void) {
     char line[64];
     int accent = colors[color_index];
     int progress = (int)((frame + (unsigned int)clicks * 12u) % 118u);
 
-    gfx_clear(18);
-    gfx_fill_rect(0, 0, SW, TOP_H, 1);
-    gfx_fill_rect(0, TOP_H - 1, SW, 1, 8);
-    gfx_text(5, 3, "USER GUI DEMO", 15, -1);
-    gfx_fill_rect(EXIT_X, EXIT_Y, EXIT_W, EXIT_H,
-                  inside(pointer_x, pointer_y, EXIT_X, EXIT_Y, EXIT_W, EXIT_H) ? 14 : 12);
-    border(EXIT_X, EXIT_Y, EXIT_W, EXIT_H, 15, 0);
-    gfx_text(EXIT_X + 6, EXIT_Y + 1, "EXIT", 15, -1);
+    gfx_clear(UI_BG);
+    ui_topbar("USER GUI DEMO",
+              inside(pointer_x, pointer_y, EXIT_X, EXIT_Y, EXIT_W, EXIT_H));
+    ui_panel(6, 18, 308, 176, "SAMPLE CONTROLS", accent);
 
-    gfx_fill_rect(6, 18, 308, 176, 7);
-    border(6, 18, 308, 176, 15, 0);
-    gfx_fill_rect(7, 19, 306, 10, accent);
-    gfx_text(12, 21, "SAMPLE CONTROLS", 15, -1);
-
-    button(BTN_X, BTN_Y, BTN_W, BTN_H, "CLICK", 0);
-    button(TOGGLE_X, TOGGLE_Y, TOGGLE_W, TOGGLE_H, toggle_on ? "ON" : "OFF", toggle_on);
-    button(SAVE_X, SAVE_Y, SAVE_W, SAVE_H, "SAVE", 0);
-    button(RESET_X, RESET_Y, RESET_W, RESET_H, "RESET", 0);
+    ui_button(BTN_X, BTN_Y, BTN_W, BTN_H, "CLICK",
+              inside(pointer_x, pointer_y, BTN_X, BTN_Y, BTN_W, BTN_H), 0);
+    ui_button(TOGGLE_X, TOGGLE_Y, TOGGLE_W, TOGGLE_H, toggle_on ? "ON" : "OFF",
+              inside(pointer_x, pointer_y, TOGGLE_X, TOGGLE_Y, TOGGLE_W, TOGGLE_H),
+              toggle_on);
+    ui_button(SAVE_X, SAVE_Y, SAVE_W, SAVE_H, "SAVE",
+              inside(pointer_x, pointer_y, SAVE_X, SAVE_Y, SAVE_W, SAVE_H), 0);
+    ui_button(RESET_X, RESET_Y, RESET_W, RESET_H, "RESET",
+              inside(pointer_x, pointer_y, RESET_X, RESET_Y, RESET_W, RESET_H), 0);
 
     line[0] = 0;
     append_text(line, "CLICKS ", sizeof(line));
@@ -485,12 +428,12 @@ static void draw_demo(void) {
     for (int i = 0; i < (int)(sizeof(colors) / sizeof(colors[0])); i++) {
         int sx = SWATCH_X + i * 20;
         gfx_fill_rect(sx, SWATCH_Y, SWATCH_W, SWATCH_H, colors[i]);
-        border(sx, SWATCH_Y, SWATCH_W, SWATCH_H, i == color_index ? 14 : 15, 0);
+        ui_border(sx, SWATCH_Y, SWATCH_W, SWATCH_H, i == color_index ? UI_HOT : UI_FIELD, 0);
     }
 
     gfx_text(128, 69, "ANIMATED BAR", 0, -1);
-    gfx_fill_rect(128, 82, 120, 12, 15);
-    border(128, 82, 120, 12, 15, 0);
+    gfx_fill_rect(128, 82, 120, 12, UI_FIELD);
+    ui_border(128, 82, 120, 12, UI_FIELD, 0);
     gfx_fill_rect(129, 83, progress, 10, accent);
 
     draw_textbox();
@@ -507,7 +450,7 @@ static void draw_demo(void) {
     gfx_text(18, 166, "USER GFX APP", 1, -1);
     gfx_text(18, 177, "TEXTBOX MOUSE FS", 0, -1);
 
-    draw_pointer();
+    ui_pointer(pointer_x, pointer_y);
 }
 
 int main(int argc, char **argv) {

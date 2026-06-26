@@ -1153,6 +1153,60 @@ def check_app_manifests(list_only=False):
     ok("app manifests: " + ", ".join(app for app, _symbol, _manifest in apps))
 
 
+def check_gui_style():
+    makefile = read_text("Makefile")
+    style_h = read_text("src/user/libc/gui_style.h")
+    report_py = read_text("tools/project_report.py")
+    readme = read_text("README.md")
+    readme_en = read_text("README.en.md")
+    user_gui = read_text("docs/user-gui.md")
+    project_status = read_text("docs/project-status.md")
+    work_items = read_text("docs/work-items.md")
+    changelog = read_text("CHANGELOG.md")
+
+    for snippet in [
+        "USER_HEADERS",
+        "src/user/libc/gui_style.h",
+        "$(BUILD)/user/%.o: src/user/bin/%.c $(USER_HEADERS)",
+    ]:
+        if snippet not in makefile:
+            fail(f"Makefile is missing GUI style dependency: {snippet}")
+
+    for snippet in [
+        "UI_ACCENT",
+        "ui_topbar",
+        "ui_panel",
+        "ui_button",
+        "ui_field",
+        "ui_textbox",
+        "ui_pointer",
+    ]:
+        if snippet not in style_h:
+            fail(f"gui_style.h is missing shared UI helper: {snippet}")
+
+    for app in parse_make_words(makefile, "GUI_APP_NAMES"):
+        source = read_text(f"src/user/bin/{app}.c")
+        if '#include "gui_style.h"' not in source:
+            fail(f"{app}.c does not include shared GUI style")
+        for snippet in ["ui_topbar", "ui_panel", "ui_button", "ui_pointer"]:
+            if snippet not in source:
+                fail(f"{app}.c is missing shared GUI helper: {snippet}")
+        for stale in ["static void border", "static void button", "static void draw_pointer"]:
+            if stale in source:
+                fail(f"{app}.c still has duplicated UI helper: {stale}")
+
+    for snippet in ["collect_gui_style", "## GUI Style", "gui_style.h"]:
+        if snippet not in report_py:
+            fail(f"project report is missing GUI style summary: {snippet}")
+
+    for snippet in ["gui_style.h", "统一", "shared"]:
+        docs = readme + "\n" + readme_en + "\n" + user_gui + "\n" + project_status + "\n" + work_items + "\n" + changelog
+        if snippet not in docs:
+            fail(f"docs/logs are missing GUI style note: {snippet}")
+
+    ok("GUI style: seeded GUI apps share gui_style.h helpers for topbar, panels, buttons, fields, and pointer")
+
+
 def main():
     parser = argparse.ArgumentParser(description="BuzzOS host-side consistency checks")
     parser.add_argument("--apps-only", action="store_true", help="only validate /fs/apps manifests and build outputs")
@@ -1182,6 +1236,7 @@ def main():
     check_initrd_reachability()
     check_initrd_hygiene()
     check_app_manifests()
+    check_gui_style()
     print("Project check passed.")
 
 

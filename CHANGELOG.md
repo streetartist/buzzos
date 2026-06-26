@@ -34,6 +34,9 @@ short log for reviewers and contributors; deeper design notes live under
 - Added source-side app metadata and registry generation so GUI apps can ship
   with `.app` manifests, readmes, optional seed files, and generated kernel
   seed data.
+- Unified seeded user GUI app styling through `src/user/libc/gui_style.h`,
+  sharing top bars, panels, buttons, text boxes, pointer drawing, and status
+  colors across `guidemo`, `notes`, `forms`, and `calc`.
 
 ### Kernel And Runtime
 

@@ -28,6 +28,8 @@ filesystem, and a user-space GUI app manager.
   `fsstat`, smoke coverage, and `make report` expose the live `/fs`/minifs
   counters and host-side check/repair entrypoints.
 - GUI examples: `guidemo`, `notes`, `forms`, and `calc`.
+- Unified user GUI style: seeded apps share `src/user/libc/gui_style.h` for
+  top bars, panels, buttons, text boxes, pointer drawing, and status colors.
 - App packaging: optional `.app` manifests provide `name`, `kind`, `version`,
   `summary`, `state`, `source`, and `readme` metadata for the App Center.
 - App registry: `tools/gen_app_registry.py` generates `src/kernel/app_registry.h`

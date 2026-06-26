@@ -30,6 +30,7 @@ English: [README.en.md](README.en.md)
 - 用户态 `nano` 编辑器和 `basm` 小型汇编器，可在 BuzzOS 内编辑、汇编并运行简单汇编程序。
 - 用户态 `gui` 桌面，通过 framebuffer blit、PS/2 鼠标和图形 syscall 提供 paint、内置 shell 与 `/fs/apps` GUI 程序启动器。
 - `/fs/apps` 默认种子用户 GUI：`guidemo` 单行文本框、`notes` 多行编辑器、`forms` 多文本框表单、`calc` 双输入计算器、持久化状态和 App Center `.app` 元数据。
+- 种子用户 GUI 统一使用 `src/user/libc/gui_style.h` 的 shared 顶栏、面板、按钮、文本框、指针和状态色 helper，避免每个 app 各画一套控件。
 - 抢占式任务调度，进程/线程模型，`spawn`、`join`、`sleep`、`waitpid`、`kill`。
 - 系统调用 ABI：文件、进程、目录、网络、IPC、同步等基础接口。
 - VFS + mount table：

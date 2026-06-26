@@ -1,4 +1,5 @@
 #include "libc.h"
+#include "gui_style.h"
 
 #define CTRL_C 0x03
 #define CTRL_S 0x13
@@ -139,13 +140,6 @@ static void append_int(char *dst, int v, int cap) {
     }
     while (n > 0)
         append_char(dst, tmp[--n], cap);
-}
-
-static void border(int x, int y, int w, int h, int light, int dark) {
-    gfx_fill_rect(x, y, w, 1, light);
-    gfx_fill_rect(x, y, 1, h, light);
-    gfx_fill_rect(x, y + h - 1, w, 1, dark);
-    gfx_fill_rect(x + w - 1, y, 1, h, dark);
 }
 
 static void set_field(struct field *f, const char *src) {
@@ -327,63 +321,29 @@ static void save_calc(void) {
     }
 }
 
-static void button(int x, int y, int w, int h, const char *label, int active) {
-    int hot = inside(pointer_x, pointer_y, x, y, w, h);
-    int fill = active ? 10 : (hot ? 15 : 7);
-    int fg = active ? 15 : 1;
-    gfx_fill_rect(x, y, w, h, fill);
-    border(x, y, w, h, hot ? 14 : 15, active ? 2 : 8);
-    gfx_text(x + 7, y + 5, label, fg, -1);
-}
-
-static void text_clip(int x, int y, const char *s, int chars, int fg, int bg) {
-    char tmp[32];
-    int i = 0;
-    while (s && s[i] && i < chars && i < (int)sizeof(tmp) - 1) {
-        tmp[i] = s[i];
-        i++;
-    }
-    tmp[i] = 0;
-    gfx_text(x, y, tmp, fg, bg);
-}
-
 static void draw_field(int index) {
     struct field *f = &fields[index];
     int hot = inside(pointer_x, pointer_y, FIELD_X, f->y, FIELD_W, FIELD_H);
     int active = focused == index;
 
-    gfx_text(FIELD_X, f->y - 10, f->label, 1, -1);
-    gfx_fill_rect(FIELD_X, f->y, FIELD_W, FIELD_H, 15);
-    border(FIELD_X, f->y, FIELD_W, FIELD_H,
-           active ? 14 : (hot ? 11 : 15),
-           active ? 1 : 8);
-
-    if (f->len == 0 && !active)
-        gfx_text(FIELD_X + 5, f->y + 5, "INTEGER", 8, -1);
-    else
-        text_clip(FIELD_X + 5, f->y + 5, f->text, FIELD_MAX, 1, -1);
-
-    if (active && ((frame / 20u) & 1u) == 0u) {
-        int cx = FIELD_X + 5 + f->cursor * 6;
-        if (cx > FIELD_X + FIELD_W - 5)
-            cx = FIELD_X + FIELD_W - 5;
-        gfx_fill_rect(cx, f->y + 4, 1, 9, 1);
-    }
+    ui_textbox(FIELD_X, f->y, FIELD_W, FIELD_H, f->label,
+               f->text, "INTEGER", FIELD_MAX, hot, active, f->cursor, frame);
 }
 
 static void draw_ops(void) {
-    button(OP_X, OP_Y, OP_W, OP_H, "+", op == OP_ADD);
-    button(OP_X + OP_STEP, OP_Y, OP_W, OP_H, "-", op == OP_SUB);
-    button(OP_X + OP_STEP * 2, OP_Y, OP_W, OP_H, "X", op == OP_MUL);
-    button(OP_X + OP_STEP * 3, OP_Y, OP_W, OP_H, "/", op == OP_DIV);
+    ui_button(OP_X, OP_Y, OP_W, OP_H, "+",
+              inside(pointer_x, pointer_y, OP_X, OP_Y, OP_W, OP_H), op == OP_ADD);
+    ui_button(OP_X + OP_STEP, OP_Y, OP_W, OP_H, "-",
+              inside(pointer_x, pointer_y, OP_X + OP_STEP, OP_Y, OP_W, OP_H), op == OP_SUB);
+    ui_button(OP_X + OP_STEP * 2, OP_Y, OP_W, OP_H, "X",
+              inside(pointer_x, pointer_y, OP_X + OP_STEP * 2, OP_Y, OP_W, OP_H), op == OP_MUL);
+    ui_button(OP_X + OP_STEP * 3, OP_Y, OP_W, OP_H, "/",
+              inside(pointer_x, pointer_y, OP_X + OP_STEP * 3, OP_Y, OP_W, OP_H), op == OP_DIV);
 }
 
 static void draw_result(void) {
     char line[48];
-    gfx_fill_rect(RESULT_X, RESULT_Y, RESULT_W, RESULT_H, 15);
-    border(RESULT_X, RESULT_Y, RESULT_W, RESULT_H, 15, 8);
-    gfx_fill_rect(RESULT_X + 1, RESULT_Y + 1, RESULT_W - 2, 11, 11);
-    gfx_text(RESULT_X + 7, RESULT_Y + 3, "RESULT", 15, -1);
+    ui_panel(RESULT_X, RESULT_Y, RESULT_W, RESULT_H, "RESULT", UI_ACCENT_ALT);
 
     line[0] = 0;
     append_text(line, a_text[0] ? a_text : "?", sizeof(line));
@@ -392,8 +352,8 @@ static void draw_result(void) {
     append_char(line, ' ', sizeof(line));
     append_text(line, b_text[0] ? b_text : "?", sizeof(line));
     append_text(line, " =", sizeof(line));
-    text_clip(RESULT_X + 7, RESULT_Y + 18, line, 18, 1, -1);
-    text_clip(RESULT_X + 7, RESULT_Y + 31, result_text, 18, 10, -1);
+    ui_text_clip(RESULT_X + 7, RESULT_Y + 18, line, 18, 1, -1);
+    ui_text_clip(RESULT_X + 7, RESULT_Y + 31, result_text, 18, UI_OK, -1);
 }
 
 static int read_byte_poll(void) {
@@ -611,18 +571,6 @@ static void handle_mouse(void) {
     prev_left = left;
 }
 
-static void draw_pointer(void) {
-    int x = pointer_x;
-    int y = pointer_y;
-    gfx_fill_rect(x, y, 1, 13, 0);
-    gfx_fill_rect(x + 1, y + 1, 1, 11, 0);
-    gfx_fill_rect(x + 2, y + 2, 1, 9, 15);
-    gfx_fill_rect(x + 3, y + 3, 1, 7, 15);
-    gfx_fill_rect(x + 4, y + 4, 1, 5, 15);
-    gfx_fill_rect(x + 5, y + 5, 1, 3, 0);
-    gfx_fill_rect(x, y + 13, 5, 1, 0);
-}
-
 static void draw_status(void) {
     char line[64];
     const char *state = saved_flash > 0 ? "SAVED" : (dirty ? "DIRTY" : "LOADED");
@@ -630,35 +578,30 @@ static void draw_status(void) {
     append_text(line, state, sizeof(line));
     append_text(line, "  ", sizeof(line));
     append_text(line, status_text, sizeof(line));
-    text_clip(12, 178, line, 49, saved_flash > 0 ? 10 : (dirty ? 12 : 9), -1);
+    ui_text_clip(12, 178, line, 49, saved_flash > 0 ? UI_OK : (dirty ? UI_DANGER : UI_ACCENT), -1);
 }
 
 static void draw(void) {
-    gfx_clear(18);
-    gfx_fill_rect(0, 0, SW, TOP_H, 1);
-    gfx_fill_rect(0, TOP_H - 1, SW, 1, 8);
-    gfx_text(5, 3, "CALC", 15, -1);
-    gfx_fill_rect(EXIT_X, EXIT_Y, EXIT_W, EXIT_H,
-                  inside(pointer_x, pointer_y, EXIT_X, EXIT_Y, EXIT_W, EXIT_H) ? 14 : 12);
-    border(EXIT_X, EXIT_Y, EXIT_W, EXIT_H, 15, 0);
-    gfx_text(EXIT_X + 6, EXIT_Y + 1, "EXIT", 15, -1);
-
-    gfx_fill_rect(6, 18, 308, 176, 7);
-    border(6, 18, 308, 176, 15, 0);
-    gfx_fill_rect(7, 19, 306, 10, 9);
-    gfx_text(12, 21, "TEXTBOX CALCULATOR", 15, -1);
+    gfx_clear(UI_BG);
+    ui_topbar("CALC",
+              inside(pointer_x, pointer_y, EXIT_X, EXIT_Y, EXIT_W, EXIT_H));
+    ui_panel(6, 18, 308, 176, "TEXTBOX CALCULATOR", UI_ACCENT);
 
     draw_field(0);
     draw_field(1);
     draw_ops();
     draw_result();
 
-    button(SAVE_X, BTN_Y, BTN_W, BTN_H, "SAVE", 0);
-    button(LOAD_X, BTN_Y, BTN_W, BTN_H, "LOAD", 0);
-    button(CLEAR_X, BTN_Y, BTN_W + 8, BTN_H, "CLEAR", 0);
-    button(EQUAL_X, BTN_Y, EQUAL_W, BTN_H, "EQUAL", 1);
+    ui_button(SAVE_X, BTN_Y, BTN_W, BTN_H, "SAVE",
+              inside(pointer_x, pointer_y, SAVE_X, BTN_Y, BTN_W, BTN_H), 0);
+    ui_button(LOAD_X, BTN_Y, BTN_W, BTN_H, "LOAD",
+              inside(pointer_x, pointer_y, LOAD_X, BTN_Y, BTN_W, BTN_H), 0);
+    ui_button(CLEAR_X, BTN_Y, BTN_W + 8, BTN_H, "CLEAR",
+              inside(pointer_x, pointer_y, CLEAR_X, BTN_Y, BTN_W + 8, BTN_H), 0);
+    ui_button(EQUAL_X, BTN_Y, EQUAL_W, BTN_H, "EQUAL",
+              inside(pointer_x, pointer_y, EQUAL_X, BTN_Y, EQUAL_W, BTN_H), 1);
     draw_status();
-    draw_pointer();
+    ui_pointer(pointer_x, pointer_y);
 }
 
 int main(int argc, char **argv) {

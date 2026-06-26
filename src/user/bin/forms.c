@@ -1,4 +1,5 @@
 #include "libc.h"
+#include "gui_style.h"
 
 #define CTRL_C 0x03
 #define CTRL_S 0x13
@@ -99,13 +100,6 @@ static void append_text(char *dst, const char *src, int cap) {
     dst[n] = 0;
 }
 
-static void border(int x, int y, int w, int h, int light, int dark) {
-    gfx_fill_rect(x, y, w, 1, light);
-    gfx_fill_rect(x, y, 1, h, light);
-    gfx_fill_rect(x, y + h - 1, w, 1, dark);
-    gfx_fill_rect(x + w - 1, y, 1, h, dark);
-}
-
 static void set_field(struct field *f, const char *src, int len) {
     int n = 0;
     while (src && n < len && src[n] && src[n] != '\n' &&
@@ -195,48 +189,13 @@ static void mark_dirty(void) {
     submit_flash = 0;
 }
 
-static void button(int x, int y, int w, int h, const char *label, int active) {
-    int hot = inside(pointer_x, pointer_y, x, y, w, h);
-    int fill = active ? 10 : (hot ? 15 : 7);
-    int fg = active ? 15 : 1;
-    gfx_fill_rect(x, y, w, h, fill);
-    border(x, y, w, h, hot ? 14 : 15, active ? 2 : 8);
-    gfx_text(x + 6, y + 4, label, fg, -1);
-}
-
-static void text_clip(int x, int y, const char *s, int chars, int fg, int bg) {
-    char tmp[32];
-    int i = 0;
-    while (s && s[i] && i < chars && i < (int)sizeof(tmp) - 1) {
-        tmp[i] = s[i];
-        i++;
-    }
-    tmp[i] = 0;
-    gfx_text(x, y, tmp, fg, bg);
-}
-
 static void draw_field(int index) {
     struct field *f = &fields[index];
     int hot = inside(pointer_x, pointer_y, FIELD_X, f->y, FIELD_W, FIELD_H);
     int active = focused == index;
 
-    gfx_text(FIELD_X, f->y - 10, f->label, 1, -1);
-    gfx_fill_rect(FIELD_X, f->y, FIELD_W, FIELD_H, 15);
-    border(FIELD_X, f->y, FIELD_W, FIELD_H,
-           active ? 14 : (hot ? 11 : 15),
-           active ? 1 : 8);
-
-    if (f->len == 0 && !active)
-        gfx_text(FIELD_X + 5, f->y + 5, "EMPTY", 8, -1);
-    else
-        text_clip(FIELD_X + 5, f->y + 5, f->text, f->max, 1, -1);
-
-    if (active && ((frame / 20u) & 1u) == 0u) {
-        int cx = FIELD_X + 5 + f->cursor * 6;
-        if (cx > FIELD_X + FIELD_W - 5)
-            cx = FIELD_X + FIELD_W - 5;
-        gfx_fill_rect(cx, f->y + 4, 1, 9, 1);
-    }
+    ui_textbox(FIELD_X, f->y, FIELD_W, FIELD_H, f->label,
+               f->text, "EMPTY", f->max, hot, active, f->cursor, frame);
 }
 
 static void draw_preview_line(int y, const char *label, const char *value) {
@@ -245,14 +204,11 @@ static void draw_preview_line(int y, const char *label, const char *value) {
     append_text(line, label, sizeof(line));
     append_text(line, ": ", sizeof(line));
     append_text(line, value[0] ? value : "-", sizeof(line));
-    text_clip(PREVIEW_X + 7, y, line, 17, 1, -1);
+    ui_text_clip(PREVIEW_X + 7, y, line, 17, 1, -1);
 }
 
 static void draw_preview(void) {
-    gfx_fill_rect(PREVIEW_X, PREVIEW_Y, PREVIEW_W, PREVIEW_H, 15);
-    border(PREVIEW_X, PREVIEW_Y, PREVIEW_W, PREVIEW_H, 15, 8);
-    gfx_fill_rect(PREVIEW_X + 1, PREVIEW_Y + 1, PREVIEW_W - 2, 11, 11);
-    gfx_text(PREVIEW_X + 7, PREVIEW_Y + 3, "LIVE PREVIEW", 15, -1);
+    ui_panel(PREVIEW_X, PREVIEW_Y, PREVIEW_W, PREVIEW_H, "LIVE PREVIEW", UI_ACCENT_ALT);
     draw_preview_line(PREVIEW_Y + 20, "NAME", name_text);
     draw_preview_line(PREVIEW_Y + 34, "ROLE", role_text);
     draw_preview_line(PREVIEW_Y + 48, "EMAIL", email_text);
@@ -429,18 +385,6 @@ static void handle_mouse(void) {
     prev_left = left;
 }
 
-static void draw_pointer(void) {
-    int x = pointer_x;
-    int y = pointer_y;
-    gfx_fill_rect(x, y, 1, 13, 0);
-    gfx_fill_rect(x + 1, y + 1, 1, 11, 0);
-    gfx_fill_rect(x + 2, y + 2, 1, 9, 15);
-    gfx_fill_rect(x + 3, y + 3, 1, 7, 15);
-    gfx_fill_rect(x + 4, y + 4, 1, 5, 15);
-    gfx_fill_rect(x + 5, y + 5, 1, 3, 0);
-    gfx_fill_rect(x, y + 13, 5, 1, 0);
-}
-
 static void draw_status(void) {
     char line[64];
     const char *status = submit_flash > 0 ? "SUBMITTED" :
@@ -450,36 +394,32 @@ static void draw_status(void) {
     append_text(line, status, sizeof(line));
     append_text(line, "  ", sizeof(line));
     append_text(line, FORM_PATH, sizeof(line));
-    text_clip(12, 178, line, 49,
-              submit_flash > 0 ? 10 : (saved_flash > 0 ? 10 : (dirty ? 12 : 9)),
-              -1);
+    ui_text_clip(12, 178, line, 49,
+                 submit_flash > 0 ? UI_OK : (saved_flash > 0 ? UI_OK : (dirty ? UI_DANGER : UI_ACCENT)),
+                 -1);
 }
 
 static void draw(void) {
-    gfx_clear(18);
-    gfx_fill_rect(0, 0, SW, TOP_H, 1);
-    gfx_fill_rect(0, TOP_H - 1, SW, 1, 8);
-    gfx_text(5, 3, "FORMS", 15, -1);
-    gfx_fill_rect(EXIT_X, EXIT_Y, EXIT_W, EXIT_H,
-                  inside(pointer_x, pointer_y, EXIT_X, EXIT_Y, EXIT_W, EXIT_H) ? 14 : 12);
-    border(EXIT_X, EXIT_Y, EXIT_W, EXIT_H, 15, 0);
-    gfx_text(EXIT_X + 6, EXIT_Y + 1, "EXIT", 15, -1);
-
-    gfx_fill_rect(6, 18, 308, 176, 7);
-    border(6, 18, 308, 176, 15, 0);
-    gfx_fill_rect(7, 19, 306, 10, 13);
-    gfx_text(12, 21, "TEXT INPUT FORM", 15, -1);
+    gfx_clear(UI_BG);
+    ui_topbar("FORMS",
+              inside(pointer_x, pointer_y, EXIT_X, EXIT_Y, EXIT_W, EXIT_H));
+    ui_panel(6, 18, 308, 176, "TEXT INPUT FORM", UI_ACCENT_STRONG);
 
     for (int i = 0; i < FIELD_COUNT; i++)
         draw_field(i);
     draw_preview();
 
-    button(SAVE_X, BTN_Y, BTN_W, BTN_H, "SAVE", 0);
-    button(LOAD_X, BTN_Y, BTN_W, BTN_H, "LOAD", 0);
-    button(CLEAR_X, BTN_Y, BTN_W + 8, BTN_H, "CLEAR", 0);
-    button(SUBMIT_X, BTN_Y, SUBMIT_W, BTN_H, "SUBMIT", submit_flash > 0);
+    ui_button(SAVE_X, BTN_Y, BTN_W, BTN_H, "SAVE",
+              inside(pointer_x, pointer_y, SAVE_X, BTN_Y, BTN_W, BTN_H), 0);
+    ui_button(LOAD_X, BTN_Y, BTN_W, BTN_H, "LOAD",
+              inside(pointer_x, pointer_y, LOAD_X, BTN_Y, BTN_W, BTN_H), 0);
+    ui_button(CLEAR_X, BTN_Y, BTN_W + 8, BTN_H, "CLEAR",
+              inside(pointer_x, pointer_y, CLEAR_X, BTN_Y, BTN_W + 8, BTN_H), 0);
+    ui_button(SUBMIT_X, BTN_Y, SUBMIT_W, BTN_H, "SUBMIT",
+              inside(pointer_x, pointer_y, SUBMIT_X, BTN_Y, SUBMIT_W, BTN_H),
+              submit_flash > 0);
     draw_status();
-    draw_pointer();
+    ui_pointer(pointer_x, pointer_y);
 }
 
 int main(int argc, char **argv) {

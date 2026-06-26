@@ -207,6 +207,27 @@ def collect_apps():
     return rows
 
 
+def collect_gui_style():
+    makefile = read_text_if_exists("Makefile")
+    apps = parse_make_words(makefile, "GUI_APP_NAMES")
+    header = read_text_if_exists("src/user/libc/gui_style.h")
+    rows = [{
+        "item": "src/user/libc/gui_style.h",
+        "status": "present" if header else "missing",
+        "evidence": "ui_topbar/ui_panel/ui_button/ui_textbox/ui_pointer"
+                    if all(name in header for name in ["ui_topbar", "ui_panel", "ui_button", "ui_textbox", "ui_pointer"])
+                    else "incomplete",
+    }]
+    for app in apps:
+        source = read_text_if_exists(f"src/user/bin/{app}.c")
+        rows.append({
+            "item": app,
+            "status": "yes" if '#include "gui_style.h"' in source else "no",
+            "evidence": ",".join(name for name in ["ui_topbar", "ui_panel", "ui_button", "ui_textbox", "ui_pointer"] if name in source) or "-",
+        })
+    return rows
+
+
 def collect_minifs(image_path, fs_start, fs_sectors):
     path = ROOT / image_path
     if not path.exists():
@@ -560,6 +581,10 @@ def build_report(python_cmd="python", make_cmd="make", qemu_cmd="qemu-system-i38
         lines.append("No GUI_APP_NAMES found in Makefile.")
     lines.append("")
 
+    lines.append("## GUI Style")
+    lines.extend(table(["item", "status", "evidence"], collect_gui_style()))
+    lines.append("")
+
     procfs = collect_procfs_entries()
     lines.append("## Procfs")
     if procfs:
@@ -615,7 +640,7 @@ def build_report(python_cmd="python", make_cmd="make", qemu_cmd="qemu-system-i38
     lines.append("## Gates")
     lines.append("")
     lines.append("- `make verify` runs project checks, serial smoke with deterministic single/dual TCP socket coverage, minifs positive/negative/repair checks, and GUI smoke.")
-    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface/limit/fs diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, guide docs, and app manifest checks.")
+    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface/limit/fs diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, guide docs, GUI style, and app manifest checks.")
     lines.append("- `make fs-repair` writes a conservatively repaired minifs image copy instead of overwriting the current image.")
     lines.append("- `make fs-check-repair` verifies conservative minifs repair on disposable corrupted image copies.")
     lines.append("- `make help` prints the recommended local workflow without building the image.")
