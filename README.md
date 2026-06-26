@@ -56,6 +56,7 @@ English: [README.en.md](README.en.md)
 - 多接口项目介绍面：`/proc/about`、文本 shell `about`、GUI shell `about` 和 `make report` 暴露同一套轻量项目介绍与文档地图。
 - 多接口健康面板：`/proc/health`、文本 shell `health`、GUI shell `health` 和 `make report` 使用同一套轻量状态口径。
 - 多接口能力矩阵：`/proc/interfaces`、文本 shell `interfaces`、GUI shell `interfaces` 和 `make report` 暴露稳定/实验性入口。
+- 轻量运行限制面：`/proc/limits`、文本 shell `limits`、GUI shell `limits` 和 `make report` 暴露任务、fd、pipe、mount、内存与 minifs 容量边界。
 
 ## 构建与运行
 
@@ -164,6 +165,7 @@ stat <path>
 about
 health
 interfaces
+limits
 fsstat
 fdstat
 cat <file>

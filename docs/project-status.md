@@ -21,6 +21,9 @@ filesystem, and a user-space GUI app manager.
 - Interface matrix: `/proc/interfaces`, text-shell `interfaces`, GUI-shell
   `interfaces`, and `make report` document the current stable/experimental
   entrypoints without adding a heavier registry service.
+- Runtime limits: `/proc/limits`, text-shell `limits`, GUI-shell `limits`, and
+  `make report` expose capacity boundaries for tasks, fds, pipes, mounts,
+  memory, and minifs without adding a configuration service.
 - GUI examples: `guidemo`, `notes`, `forms`, and `calc`.
 - App packaging: optional `.app` manifests provide `name`, `kind`, `version`,
   `summary`, `state`, `source`, and `readme` metadata for the App Center.
@@ -117,6 +120,7 @@ cat /proc/threads
 cat /proc/meminfo
 cat /proc/health
 cat /proc/interfaces
+cat /proc/limits
 cat /proc/fds
 cat /proc/net
 cat /proc/sync
@@ -125,6 +129,7 @@ fdstat
 about
 health
 interfaces
+limits
 ```
 
 Validate only seeded GUI app packaging:

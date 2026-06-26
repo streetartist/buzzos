@@ -12,6 +12,7 @@ system without adding a new syscall for every diagnostic.
 /proc/threads
 /proc/health
 /proc/interfaces
+/proc/limits
 /proc/meminfo
 /proc/net
 /proc/sync
@@ -64,6 +65,7 @@ procfs stable /proc
 about stable /proc/about,about,gui:about,make:report
 health stable /proc/health,health,gui:health,make:report
 interfaces stable /proc/interfaces,interfaces,gui:interfaces,make:report
+limits stable /proc/limits,limits,gui:limits,make:report
 apps stable /fs/apps,apps,gui:apps,tools:gen_app_registry
 shell stable /bin/sh,pipes,redirection
 gui experimental /bin/gui,/fs/apps
@@ -76,6 +78,30 @@ report stable make:report,build/project-report.md
 The text shell exposes it as `interfaces`; the GUI shell exposes the same
 command. This keeps the supported surfaces discoverable without a heavier
 service registry.
+
+`/proc/limits` exposes fixed runtime capacity boundaries:
+
+```text
+max_tasks
+max_fd_per_owner
+max_pipes
+pipe_buf_bytes
+max_mounts
+ramfs_nodes
+ramfs_file_buf_bytes
+fs_name_len
+page_size
+managed_limit_bytes
+minifs_lba_start
+minifs_sectors
+minifs_status
+minifs_inodes
+minifs_blocks
+minifs_max_file_size
+```
+
+The text shell exposes it as `limits`; the GUI shell exposes the same command.
+These are read-only capacity facts, not tunables.
 
 `/proc/tasks` mirrors the process table format used by `ps`.
 
@@ -159,6 +185,7 @@ cat /proc/tasks
 cat /proc/threads
 cat /proc/health
 cat /proc/interfaces
+cat /proc/limits
 cat /proc/meminfo
 cat /proc/fds
 cat /proc/net
@@ -167,6 +194,7 @@ cat /proc/mounts
 about
 health
 interfaces
+limits
 fdstat
 ```
 

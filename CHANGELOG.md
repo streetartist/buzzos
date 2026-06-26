@@ -45,6 +45,9 @@ short log for reviewers and contributors; deeper design notes live under
   `make report` interface reporting.
 - Added a lightweight `/proc/interfaces` capability matrix with text-shell,
   GUI-shell, smoke, and report coverage for stable/experimental entrypoints.
+- Added `/proc/limits`, text-shell `limits`, GUI-shell `limits`, smoke
+  coverage, and `make report` runtime limit reporting for lightweight capacity
+  discovery.
 - Improved pipe behavior with blocking read/write wakeups and coverage for
   blocking pipe scenarios.
 - Reworked futex wait/wake around scheduler-backed blocking, wake-by-address,

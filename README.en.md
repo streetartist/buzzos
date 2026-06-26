@@ -64,6 +64,9 @@ the local verification report at `build/project-report.md`.
 - Multi-interface capability matrix: `/proc/interfaces`, text-shell
   `interfaces`, GUI-shell `interfaces`, and `make report` expose stable and
   experimental entrypoints.
+- Lightweight runtime limits: `/proc/limits`, text-shell `limits`, GUI-shell
+  `limits`, and `make report` expose task, fd, pipe, mount, memory, and minifs
+  capacity boundaries without adding a configuration service.
 
 ## Build And Run
 
@@ -189,6 +192,7 @@ stat <path>
 about
 health
 interfaces
+limits
 fsstat
 fdstat
 cat <file>

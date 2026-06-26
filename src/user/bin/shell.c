@@ -348,10 +348,10 @@ static int read_line(char *line, int size) {
 static void cmd_help(const char *topic) {
     topic = skip_spaces(topic);
     if (!topic[0]) {
-        puts("commands: ls cd pwd stat about health interfaces fsstat fdstat cat mkdir rmdir touch write rm mv nano basm gui apps guidemo notes forms calc ping wget tcptwotest dhcp netstat syncstat elfbadtest pipetest pipeedgetest pipeblocktest futextest futextimeouttest futexcanceltest futexblocktest threads exec wait kill ps echo sleep reboot help");
+        puts("commands: ls cd pwd stat about health interfaces limits fsstat fdstat cat mkdir rmdir touch write rm mv nano basm gui apps guidemo notes forms calc ping wget tcptwotest dhcp netstat syncstat elfbadtest pipetest pipeedgetest pipeblocktest futextest futextimeouttest futexcanceltest futexblocktest threads exec wait kill ps echo sleep reboot help");
         puts("external: /bin/echo /bin/cat; pipeline: echo hello | cat");
         puts("topics: help apps | help gui | help files | help proc | help edit | help net | help pipes");
-        puts("quick start: about; health; interfaces; gui; apps; apps info forms; forms; calc");
+        puts("quick start: about; health; limits; interfaces; gui; apps; apps info forms; forms; calc");
         return;
     }
     if (strcmp(topic, "apps") == 0) {
@@ -373,7 +373,7 @@ static void cmd_help(const char *topic) {
     }
     if (strcmp(topic, "proc") == 0) {
         puts("/proc is read-only runtime state");
-        puts("try: about; health; interfaces; ls /proc; cat /proc/about; cat /proc/health; cat /proc/interfaces");
+        puts("try: about; health; limits; interfaces; ls /proc; cat /proc/about; cat /proc/limits");
         puts("more: cat /proc/tasks; cat /proc/threads; cat /proc/fds; cat /proc/net; cat /proc/sync");
         return;
     }
@@ -921,6 +921,10 @@ static void cmd_about(void) {
 
 static void cmd_interfaces(void) {
     cmd_cat("/proc/interfaces");
+}
+
+static void cmd_limits(void) {
+    cmd_cat("/proc/limits");
 }
 
 static void cmd_netstat(void) {
@@ -1815,6 +1819,7 @@ static void execute(char *line) {
     else if (starts_with(line, "about")) cmd_about();
     else if (starts_with(line, "health")) cmd_health();
     else if (starts_with(line, "interfaces")) cmd_interfaces();
+    else if (starts_with(line, "limits")) cmd_limits();
     else if (starts_with(line, "fsstat")) cmd_fsstat();
     else if (starts_with(line, "fdstat")) cmd_fdstat();
     else if (starts_with(line, "stat ")) cmd_stat(line + 5);

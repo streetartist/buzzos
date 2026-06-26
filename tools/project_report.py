@@ -243,6 +243,69 @@ def collect_runtime_interfaces():
     return rows
 
 
+def collect_runtime_limits():
+    procfs = read_text_if_exists("src/kernel/fs/procfs.c")
+    rows = []
+    if "proc_limits_text" not in procfs:
+        rows.append({"limit": "/proc/limits", "value": "missing"})
+        return rows
+
+    task_h = read_text_if_exists("src/kernel/sched/task.h")
+    vfs_internal = read_text_if_exists("src/kernel/fs/vfs_internal.h")
+    minifs_h = read_text_if_exists("src/kernel/fs/minifs/minifs.h")
+    minifs_c = read_text_if_exists("src/kernel/fs/minifs/minifs.c")
+    pmm_h = read_text_if_exists("src/kernel/mm/pmm.h")
+    pmm_c = read_text_if_exists("src/kernel/mm/pmm.c")
+
+    def c_int(text, name):
+        m = re.search(rf"^\s*#define\s+{re.escape(name)}\s+(0x[0-9A-Fa-f]+|[0-9]+)[uUlL]*\b", text, re.M)
+        if m:
+            return int(m.group(1), 0)
+        m = re.search(rf"\b{re.escape(name)}\s*=\s*(0x[0-9A-Fa-f]+|[0-9]+)[uUlL]*\b", text)
+        return int(m.group(1), 0) if m else None
+
+    max_tasks = c_int(task_h, "MAX_TASKS")
+    max_fd = c_int(vfs_internal, "MAX_FD")
+    max_pipes = c_int(vfs_internal, "MAX_PIPES")
+    pipe_buf = c_int(vfs_internal, "PIPE_BUFSZ")
+    max_mounts = c_int(vfs_internal, "MAX_MOUNTS")
+    ramfs_nodes = c_int(vfs_internal, "FS_MAX_NODES")
+    ramfs_file_buf = c_int(vfs_internal, "FS_FILE_BUFSZ")
+    fs_name_len = c_int(vfs_internal, "FS_NAME_LEN")
+    page_size = c_int(pmm_h, "PAGE_SIZE")
+    managed_limit = c_int(pmm_c, "PMM_MANAGED_LIMIT")
+    minifs_lba = c_int(minifs_h, "MINIFS_LBA_START")
+    minifs_sectors = c_int(minifs_h, "MINIFS_SECTORS")
+    minifs_inodes = c_int(minifs_c, "MINIFS_INODES")
+    minifs_block_size = c_int(minifs_c, "MINIFS_BLOCK_SIZE")
+    minifs_direct = c_int(minifs_c, "MINIFS_DIRECT")
+    minifs_blocks = None
+    minifs_max_file_size = None
+    if minifs_sectors is not None and minifs_inodes is not None:
+        minifs_blocks = minifs_sectors - 1 - minifs_inodes - 1
+    if minifs_block_size is not None and minifs_direct is not None:
+        minifs_max_file_size = (minifs_direct + (minifs_block_size // 2)) * minifs_block_size
+
+    rows = [
+        {"limit": "max_tasks", "value": max_tasks},
+        {"limit": "max_fd_per_owner", "value": max_fd},
+        {"limit": "max_pipes", "value": max_pipes},
+        {"limit": "pipe_buf_bytes", "value": pipe_buf},
+        {"limit": "max_mounts", "value": max_mounts},
+        {"limit": "ramfs_nodes", "value": ramfs_nodes},
+        {"limit": "ramfs_file_buf_bytes", "value": ramfs_file_buf},
+        {"limit": "fs_name_len", "value": fs_name_len},
+        {"limit": "page_size", "value": page_size},
+        {"limit": "managed_limit_bytes", "value": managed_limit},
+        {"limit": "minifs_lba_start", "value": minifs_lba},
+        {"limit": "minifs_sectors", "value": minifs_sectors},
+        {"limit": "minifs_inodes", "value": minifs_inodes},
+        {"limit": "minifs_blocks", "value": minifs_blocks},
+        {"limit": "minifs_max_file_size", "value": minifs_max_file_size},
+    ]
+    return rows
+
+
 def collect_ipc_status():
     vfs_internal = read_text_if_exists("src/kernel/fs/vfs_internal.h")
     smoke = read_text_if_exists("scripts/smoke.ps1")
@@ -407,6 +470,10 @@ def build_report():
         lines.append("No `/proc/interfaces` matrix found.")
     lines.append("")
 
+    lines.append("## Runtime Limits")
+    lines.extend(table(["limit", "value"], collect_runtime_limits()))
+    lines.append("")
+
     lines.append("## IPC")
     lines.extend(table(["check", "purpose", "smoke", "pipe_buf"], collect_ipc_status()))
     lines.append("")
@@ -434,7 +501,7 @@ def build_report():
     lines.append("## Gates")
     lines.append("")
     lines.append("- `make verify` runs project checks, serial smoke with deterministic single/dual TCP socket coverage, minifs positive/negative/repair checks, and GUI smoke.")
-    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
+    lines.append("- `make check-project` includes image, memory/VGA-hole, ELF loader hardening, initrd hygiene, syscall ABI, futex scheduler-backed blocking, TCP PCB/demux buffer/single-dual smoke coverage, procfs identity/health/interface/limit diagnostics, shell stdio-only inheritance, multi-stage pipeline/redirection support, pipe blocking semantics, user ELF, initrd reachability, and app manifest checks.")
     lines.append("- `make fs-check-repair` verifies conservative minifs repair on disposable corrupted image copies.")
     lines.append("- `make report` writes this summary to `build/project-report.md`.")
     if headroom_status == "low":
