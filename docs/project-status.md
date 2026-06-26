@@ -6,9 +6,9 @@ filesystem, and a user-space GUI app manager.
 
 ## Current Shape
 
-- Boot: 16-bit BIOS sector loads a protected-mode 32-bit kernel.
+- Boot: Limine BIOS path loads the kernel through the multiboot2 protocol.
 - Kernel: GDT/IDT, paging, preemptive scheduling, syscalls, VFS, ATA, minifs,
-  NE2000 networking, keyboard, mouse, VGA text, and VGA 13h graphics syscalls.
+  NE2000 networking, keyboard, mouse, framebuffer console, and framebuffer graphics syscalls.
 - User space: `/bin/sh`, `/bin/echo`, `/bin/cat`, `nano`, `basm`, `/bin/gui`, and seeded GUI apps under
   `/fs/apps`.
 - Pseudo filesystems: `/dev`, persistent `/fs`, and read-only `/proc` status
@@ -27,7 +27,7 @@ filesystem, and a user-space GUI app manager.
 - Filesystem status: `/proc/fs`, text-shell `fsinfo`, GUI-shell `fsinfo`,
   `fsstat`, smoke coverage, and `make report` expose the live `/fs`/minifs
   counters and host-side check/repair entrypoints.
-- GUI examples: `guidemo`, `notes`, `forms`, and `calc`.
+- GUI apps: `textedit`, `paint`, and `calculator`.
 - Unified user GUI style: seeded apps share `src/user/libc/gui_style.h` for
   top bars, panels, buttons, text boxes, pointer drawing, and status colors.
 - App packaging: optional `.app` manifests provide `name`, `kind`, `version`,

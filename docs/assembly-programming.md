@@ -1666,7 +1666,6 @@ boot sector 必须：
 | `40` | `SYS_PIPE` |
 | `41` | `SYS_FUTEX_WAIT` |
 | `42` | `SYS_FUTEX_WAKE` |
-| `43` | `SYS_GFX_MODE` |
 | `44` | `SYS_GFX_CLEAR` |
 | `45` | `SYS_GFX_PUTPIXEL` |
 | `46` | `SYS_GFX_FILL_RECT` |

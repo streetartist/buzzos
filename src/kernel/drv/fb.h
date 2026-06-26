@@ -16,7 +16,6 @@ void fb_init(void);
 void fb_set_color(uint8_t fg, uint8_t bg);
 void fb_get_info(struct gfx_info *out);
 
-int  fb_set_mode(int mode);
 int  fb_clear(uint8_t color);
 int  fb_putpixel(int x, int y, uint8_t color);
 int  fb_fill_rect(int x, int y, int w, int h, uint8_t color);

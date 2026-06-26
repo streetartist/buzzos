@@ -78,7 +78,6 @@ void syscall_init(void) {
     syscall_table[SYS_FUTEX_WAIT] = sys_futex_wait;
     syscall_table[SYS_FUTEX_WAKE] = sys_futex_wake;
     syscall_table[SYS_FUTEX_WAIT_TIMEOUT] = sys_futex_wait_timeout;
-    syscall_table[SYS_GFX_MODE] = sys_gfx_mode;
     syscall_table[SYS_GFX_CLEAR] = sys_gfx_clear;
     syscall_table[SYS_GFX_PUTPIXEL] = sys_gfx_putpixel;
     syscall_table[SYS_GFX_FILL_RECT] = sys_gfx_fill_rect;

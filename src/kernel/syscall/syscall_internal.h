@@ -58,7 +58,6 @@ int sys_pipe(uint32_t fds_arg, uint32_t b, uint32_t c, uint32_t d, uint32_t e);
 int sys_futex_wait(uint32_t addr_arg, uint32_t expected, uint32_t c, uint32_t d, uint32_t e);
 int sys_futex_wait_timeout(uint32_t addr_arg, uint32_t expected, uint32_t timeout_ms, uint32_t d, uint32_t e);
 int sys_futex_wake(uint32_t addr_arg, uint32_t count, uint32_t c, uint32_t d, uint32_t e);
-int sys_gfx_mode(uint32_t mode, uint32_t b, uint32_t c, uint32_t d, uint32_t e);
 int sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c, uint32_t d, uint32_t e);
 int sys_gfx_putpixel(uint32_t x, uint32_t y, uint32_t color, uint32_t d, uint32_t e);
 int sys_gfx_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);

@@ -328,8 +328,9 @@ static void draw(void) {
 }
 
 int main(void) {
-    if (gfx_mode(1) < 0) {
-        puts("$name: graphics mode failed");
+    struct gfx_info info;
+    if (gfx_info(&info) < 0 || info.width == 0 || info.height == 0) {
+        puts("$name: framebuffer unavailable");
         exit(1);
     }
     load_state();
@@ -344,7 +345,6 @@ int main(void) {
         frame++;
         sleep_ms(16);
     }
-    gfx_mode(0);
     return 0;
 }
 ''')

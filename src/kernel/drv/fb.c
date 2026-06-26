@@ -313,11 +313,6 @@ void fb_get_info(struct gfx_info *out) {
         *out = fb_info;
 }
 
-int fb_set_mode(int mode) {
-    (void)mode;
-    return fb_ready ? 0 : -1;
-}
-
 int fb_clear(uint8_t color) {
     if (!fb_ready)
         return -1;

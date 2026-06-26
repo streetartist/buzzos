@@ -2,11 +2,6 @@
 #include "fb.h"
 #include "mouse.h"
 
-int sys_gfx_mode(uint32_t mode, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
-    (void)b; (void)c; (void)d; (void)e;
-    return fb_set_mode((int)mode);
-}
-
 int sys_gfx_info(uint32_t out_arg, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
     if (!user_range_ok(out_arg, sizeof(struct syscall_gfx_info)))

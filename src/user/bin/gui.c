@@ -1641,10 +1641,6 @@ static void init_desktop(void) {
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
-    if (gfx_mode(1) < 0) {
-        puts("gui: graphics unavailable");
-        return 1;
-    }
     init_desktop();
     while (running) {
         int key;

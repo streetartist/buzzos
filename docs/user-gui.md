@@ -220,16 +220,17 @@ python tools/check_project.py --list-apps
 The sample uses only user-space libc syscall wrappers:
 
 ```c
-gfx_mode(1);                 /* enter 320x200x256 graphics */
+gfx_info(&info);              /* inspect framebuffer size and availability */
 gfx_clear(18);
 gfx_fill_rect(x, y, w, h, color);
 gfx_text(x, y, "TEXT", fg, bg);
+fb_blit(x, y, w, h, pixels);
 mouse_get(&mouse);
 read(0, &key, 1);
 open/read/write/close;        /* persistent state in /fs/apps */
 sleep_ms(16);
-gfx_mode(0);                 /* return to text mode */
 ```
 
-That is the intended pattern for small user GUI programs: enter graphics mode,
-draw each frame, poll input, and return to text mode on exit.
+That is the intended pattern for small user GUI programs: inspect the
+framebuffer, draw each frame, submit pixels through the desktop/app protocol or
+graphics syscall wrappers, and poll input.
