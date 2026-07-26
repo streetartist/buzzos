@@ -1,16 +1,31 @@
 #include "libc.h"
 #include "guiapp.h"
 #include "palette.h"
+#include "time.h"
 #include "pinyin_data.h"
 #include "../../kernel/drv/font_builtin.h"
 
 enum {
     KEY_ESC = 0x1B,
     KEY_BACKSPACE = 0x08,
+    KEY_WINDOW_CYCLE = 0x1E,
+    KEY_WINDOW_CLOSE = 0x80,
+    KEY_WINDOW_CYCLE_REVERSE,
+    KEY_WINDOW_SNAP_LEFT,
+    KEY_WINDOW_SNAP_RIGHT,
+    KEY_WINDOW_MAXIMIZE,
+    KEY_WINDOW_RESTORE,
+    KEY_DESKTOP_EXIT,
+    KEY_LAUNCHER_TOGGLE,
     KEY_UP = 256,
     KEY_DOWN,
     KEY_RIGHT,
     KEY_LEFT,
+
+    WINDOW_SNAP_NONE = 0,
+    WINDOW_SNAP_LEFT,
+    WINDOW_SNAP_RIGHT,
+    WINDOW_SNAP_MAXIMIZE,
 
     WIN_LAUNCHER = 0,
     WIN_STATUS = 1,
@@ -32,23 +47,28 @@ enum {
     DISPLAY_GROUP_LABEL_H = 22,
     DISPLAY_GROUP_GAP = 14,
     /* Content Y of the "Resolution" heading inside the System window. */
-    STATUS_RES_HEAD_Y = 236,
-    STATUS_RES_BODY_Y = 264,
+    STATUS_RES_HEAD_Y = 264,
+    STATUS_RES_BODY_Y = 294,
     TOPBAR_H = 36,
     WINDOW_TITLE_H = 34,
     DOCK_RESERVED_H = 82,
-    LAUNCHER_HEADER_H = 36,
-    LAUNCHER_ROW_STEP = 42,
-    LAUNCHER_ROW_H = 36,
-    DOCK_SYSTEM_STEP = 86,
-    DOCK_SYSTEM_W = 80,
-    DOCK_TASK_STEP = 146,
-    DOCK_TASK_W = 140,
-    DOCK_MORE_W = 80,
-    CONTEXT_MENU_W = 150,
-    CONTEXT_ITEM_STEP = 40,
-    CONTEXT_ITEM_H = 36,
-    CONTEXT_MENU_H = 128,
+    LAUNCHER_HEADER_H = 86,
+    LAUNCHER_ROW_STEP = 62,
+    LAUNCHER_ROW_H = 58,
+    LAUNCHER_QUERY_CAP = 32,
+    DOCK_SYSTEM_STEP = 54,
+    DOCK_SYSTEM_W = 46,
+    DOCK_TASK_STEP = 54,
+    DOCK_TASK_W = 46,
+    DOCK_MORE_W = 46,
+    DOCK_TOOLTIP_DELAY = 24,
+    CONTEXT_MENU_W = 184,
+    CONTEXT_ITEM_STEP = 38,
+    CONTEXT_ITEM_H = 34,
+    CONTEXT_MENU_H = 126,
+    CONTROL_CENTER_W = 380,
+    CONTROL_CENTER_H = 326,
+    CONTROL_CENTER_ITEM_COUNT = 3,
     WIN_MIN_W = 260,
     WIN_MIN_H = 170,
     RESIZE_PAD = 6,
@@ -98,10 +118,13 @@ struct window {
     int active;
     int minimized;
     int maximized;
+    int snap_mode;
 };
 
 struct app_entry {
-    char name[24];
+    char file[24];
+    char name[32];
+    char summary[64];
     char path[64];
     uint32_t size;
 };
@@ -167,14 +190,26 @@ static int app_count;
 static int app_selected;
 static int app_last_click = -1;
 static unsigned int app_last_click_tick;
+static int title_last_click = -1;
+static unsigned int title_last_click_tick;
+static int title_last_click_x;
+static int title_last_click_y;
+static char launcher_query[LAUNCHER_QUERY_CAP];
+static int launcher_query_length;
 static int dock_hover = -1;
 static int dock_expanded;
+static unsigned int dock_hover_since;
+static int dock_tooltip_visible;
 static int pointer_x;
 static int pointer_y;
 static int prev_buttons;
 static int drag_win = -1;
 static int drag_dx;
 static int drag_dy;
+static int drag_start_x;
+static int drag_start_y;
+static int drag_moved;
+static int snap_preview_mode;
 static int scroll_drag_win = -1;
 static int scroll_drag_axis;
 static int scroll_drag_mouse;
@@ -204,8 +239,14 @@ static int pointer_drawn_x;
 static int pointer_drawn_y;
 static int pointer_drawn_valid;
 static int keyevent_fd = -1;
+static int suppress_tab_release;
 static unsigned int tick;
 static unsigned int last_render_tick;
+static unsigned int clock_cache_tick;
+static int clock_cache_valid;
+static int32_t clock_cache_minute = -1;
+static char clock_cache[24];
+static char date_cache[48];
 static uint32_t last_app_tick_ms;
 static volatile int desktop_dirty = 1;
 static volatile uint32_t app_frame_dirty_mask;
@@ -242,6 +283,9 @@ static int context_open;
 static int context_x;
 static int context_y;
 static int context_target = -1;
+static int control_center_open;
+static int control_center_selected;
+static int hover_topbar_control = -1;
 static unsigned int mode_error_until;
 
 static int gray(int n) {
@@ -257,6 +301,7 @@ static const uint8_t corner_inner[4] = {2, 1, 1, 0};
 
 static int min_i(int a, int b) { return a < b ? a : b; }
 static int max_i(int a, int b) { return a > b ? a : b; }
+static int abs_i(int value) { return value < 0 ? -value : value; }
 static int clamp_i(int v, int lo, int hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -551,11 +596,6 @@ static void pixel_clip(int x, int y, int color, struct rect clip) {
 
 static void text_clip(int x, int y, const char *s, int fg, int bg, struct rect clip);
 
-static void text(int x, int y, const char *s, int fg, int bg) {
-    struct rect clip = {0, 0, sw, sh};
-    text_clip(x, y, s, fg, bg, clip);
-}
-
 static uint32_t gui_utf8_next(const char **text) {
     const uint8_t *s = (const uint8_t *)*text;
     uint32_t cp;
@@ -745,13 +785,13 @@ static void fill_circle(int cx, int cy, int rad, int color) {
     }
 }
 
-/* Soft drop shadow: two blended black layers, 6px max extent (matches
- * the +6 damage margin used by window move/resize code). */
+/* Soft drop shadow: a quiet near edge plus a wider bottom/right falloff.
+ * The six-pixel extent still matches the move/resize damage margin. */
 static void shadow(struct rect r) {
-    fill_blend((struct rect){r.x + 6, r.y + r.h, r.w, 6}, 0, 55);
-    fill_blend((struct rect){r.x + r.w, r.y + 6, 6, r.h}, 0, 55);
-    fill_blend((struct rect){r.x + 3, r.y + r.h, r.w, 3}, 0, 120);
-    fill_blend((struct rect){r.x + r.w, r.y + 3, 3, r.h}, 0, 120);
+    fill_blend((struct rect){r.x + 5, r.y + r.h, r.w, 5}, 0, 44);
+    fill_blend((struct rect){r.x + r.w, r.y + 5, 5, r.h}, 0, 44);
+    fill_blend((struct rect){r.x + 2, r.y + r.h, r.w, 2}, 0, 76);
+    fill_blend((struct rect){r.x + r.w, r.y + 2, 2, r.h}, 0, 76);
 }
 
 static void button_state(struct rect r, const char *label, int active,
@@ -761,10 +801,10 @@ static void button_state(struct rect r, const char *label, int active,
     int bg = active ? THEME_ACCENT_DIM :
              hovered ? THEME_WIN_HOVER : THEME_WIN_CONTROL;
     int edge = active ? THEME_ACCENT :
-               hovered ? THEME_FIELD_BORDER : THEME_WIN_BORDER_INACT;
-    int fg = THEME_TEXT;
+               hovered ? THEME_ACCENT_DIM : THEME_WIN_BORDER_INACT;
+    int fg = active ? THEME_TEXT_ON_LIGHT : THEME_TEXT;
     if (pressed)
-        bg = active ? THEME_ACCENT_SOFT : THEME_WIN_PRESSED;
+        bg = active ? THEME_ACCENT_DIM : THEME_WIN_PRESSED;
     if (disabled) {
         bg = THEME_PANEL_RAISED;
         edge = THEME_DIVIDER;
@@ -829,12 +869,65 @@ static struct rect launcher_row_paint_rect(int index);
 static int hit_launcher_row_at(int x, int y);
 static int top_window_at(int x, int y);
 static void close_window(int id);
+static void minimize_window(int id);
 static void clamp_scroll(int id);
 static void activate(int id);
 static void update_hover_app(int force);
 static void run_app_with_arg(const char *path, const char *argument);
 static void gui_log(const char *message) {
     puts(message);
+}
+
+static int manifest_key_length(const char *line, int line_len,
+                               const char *key) {
+    int i = 0;
+    while (key[i]) {
+        if (i >= line_len || line[i] != key[i])
+            return 0;
+        i++;
+    }
+    return i < line_len && line[i] == '=' ? i : 0;
+}
+
+static int copy_manifest_value(char *dst, size_t cap, const char *line,
+                               int line_len, const char *key) {
+    int key_len = manifest_key_length(line, line_len, key);
+    if (!key_len || cap == 0)
+        return 0;
+    int src = key_len + 1;
+    size_t out = 0;
+    while (src < line_len && out + 1 < cap)
+        dst[out++] = line[src++];
+    dst[out] = 0;
+    return 1;
+}
+
+static void load_launcher_manifest(struct app_entry *app,
+                                   const char *manifest_path) {
+    char buf[384];
+    int fd = open(manifest_path, O_RDONLY);
+    if (fd < 0)
+        return;
+    int n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0)
+        return;
+    buf[n] = 0;
+    int start = 0;
+    for (int i = 0; i <= n; i++) {
+        if (buf[i] != '\n' && buf[i] != 0)
+            continue;
+        int len = i - start;
+        if (len > 0 && buf[start + len - 1] == '\r')
+            len--;
+        if (len > 0) {
+            if (!copy_manifest_value(app->name, sizeof(app->name),
+                                     buf + start, len, "name"))
+                (void)copy_manifest_value(app->summary, sizeof(app->summary),
+                                          buf + start, len, "summary");
+        }
+        start = i + 1;
+    }
 }
 
 static void scan_apps(void) {
@@ -870,15 +963,92 @@ static void scan_apps(void) {
             append_text(manifest_path, ".app", sizeof(manifest_path));
             if (stat(manifest_path, &manifest_st) < 0 || manifest_st.st_type != DT_REG)
                 continue;
-            copy_text(apps[app_count].name, ents[i].d_name, sizeof(apps[app_count].name));
-            copy_text(apps[app_count].path, app_path, sizeof(apps[app_count].path));
-            apps[app_count].size = ents[i].d_size;
+            struct app_entry *app = &apps[app_count];
+            copy_text(app->file, ents[i].d_name, sizeof(app->file));
+            copy_text(app->name, ents[i].d_name, sizeof(app->name));
+            copy_text(app->summary, "GUI application", sizeof(app->summary));
+            copy_text(app->path, app_path, sizeof(app->path));
+            app->size = ents[i].d_size;
+            load_launcher_manifest(app, manifest_path);
             app_count++;
         }
     }
     close(fd);
     if (app_selected >= app_count)
         app_selected = app_count > 0 ? app_count - 1 : 0;
+}
+
+static int launcher_ascii_lower(int c) {
+    if (c >= 'A' && c <= 'Z')
+        return c + ('a' - 'A');
+    return c;
+}
+
+static int launcher_contains_case(const char *text_value,
+                                  const char *query) {
+    if (!query || !query[0])
+        return 1;
+    if (!text_value)
+        return 0;
+    for (int start = 0; text_value[start]; start++) {
+        int qi = 0;
+        while (query[qi] && text_value[start + qi] &&
+               launcher_ascii_lower((unsigned char)text_value[start + qi]) ==
+               launcher_ascii_lower((unsigned char)query[qi]))
+            qi++;
+        if (!query[qi])
+            return 1;
+    }
+    return 0;
+}
+
+static int launcher_app_matches(int index) {
+    if (index < 0 || index >= app_count)
+        return 0;
+    return launcher_contains_case(apps[index].name, launcher_query) ||
+           launcher_contains_case(apps[index].summary, launcher_query) ||
+           launcher_contains_case(apps[index].file, launcher_query);
+}
+
+static int launcher_result_count(void) {
+    int count = 0;
+    for (int i = 0; i < app_count; i++)
+        if (launcher_app_matches(i))
+            count++;
+    return count;
+}
+
+static int launcher_app_at_result(int result_index) {
+    int result = 0;
+    for (int i = 0; i < app_count; i++) {
+        if (!launcher_app_matches(i))
+            continue;
+        if (result == result_index)
+            return i;
+        result++;
+    }
+    return -1;
+}
+
+static int launcher_result_for_app(int app_index) {
+    int result = 0;
+    for (int i = 0; i < app_count; i++) {
+        if (!launcher_app_matches(i))
+            continue;
+        if (i == app_index)
+            return result;
+        result++;
+    }
+    return -1;
+}
+
+static void launcher_select_first_result(void) {
+    int first = launcher_app_at_result(0);
+    app_selected = first >= 0 ? first : 0;
+    app_last_click = -1;
+    scroll_x[WIN_LAUNCHER] = 0;
+    scroll_y[WIN_LAUNCHER] = 0;
+    hover_launcher_row = -1;
 }
 
 static int app_slot_for_win(int id) {
@@ -1205,6 +1375,7 @@ static void run_app_with_arg(const char *path, const char *argument) {
     windows[id].visible = 1;
     windows[id].minimized = 0;
     windows[id].maximized = 0;
+    windows[id].snap_mode = WINDOW_SNAP_NONE;
 
     app_sessions[slot].used = 1;
     app_sessions[slot].pid = pid;
@@ -1250,6 +1421,15 @@ static void run_app(const char *path) {
     run_app_with_arg(path, 0);
 }
 
+static void launcher_run_app(int index) {
+    if (index < 0 || index >= app_count)
+        return;
+    launcher_query_length = 0;
+    launcher_query[0] = 0;
+    launcher_select_first_result();
+    run_app(apps[index].path);
+}
+
 static void activate(int id) {
     if (id < 0 || id >= WIN_COUNT)
         return;
@@ -1293,7 +1473,7 @@ static void layout(void) {
     int left_w = min_i(max_i(360, sw / 3), 620);
     int right_w = min_i(max_i(400, sw / 3), 620);
     int launcher_h = min_i(content_h,
-                           max_i(300, 126 + app_count * LAUNCHER_ROW_STEP));
+                           max_i(300, 134 + app_count * LAUNCHER_ROW_STEP));
 
     windows[WIN_LAUNCHER].title = "Applications";
     windows[WIN_LAUNCHER].dock_label = "Apps";
@@ -1301,6 +1481,9 @@ static void layout(void) {
                                             left_w, launcher_h};
     windows[WIN_LAUNCHER].restore = windows[WIN_LAUNCHER].r;
     windows[WIN_LAUNCHER].visible = 1;
+    windows[WIN_LAUNCHER].minimized = 0;
+    windows[WIN_LAUNCHER].maximized = 0;
+    windows[WIN_LAUNCHER].snap_mode = WINDOW_SNAP_NONE;
 
     windows[WIN_STATUS].title = "System";
     windows[WIN_STATUS].dock_label = "Sys";
@@ -1312,6 +1495,9 @@ static void layout(void) {
     };
     windows[WIN_STATUS].restore = windows[WIN_STATUS].r;
     windows[WIN_STATUS].visible = 1;
+    windows[WIN_STATUS].minimized = 1;
+    windows[WIN_STATUS].maximized = 0;
+    windows[WIN_STATUS].snap_mode = WINDOW_SNAP_NONE;
 
     z_order[0] = WIN_LAUNCHER;
     z_order[1] = WIN_STATUS;
@@ -1325,6 +1511,7 @@ static void layout(void) {
         windows[id].active = 0;
         windows[id].minimized = 0;
         windows[id].maximized = 0;
+        windows[id].snap_mode = WINDOW_SNAP_NONE;
         z_order[WIN_APP_BASE + i] = id;
     }
     activate(WIN_LAUNCHER);
@@ -1332,30 +1519,114 @@ static void layout(void) {
 
 static void draw_background(void) {
     fill((struct rect){0, 0, sw, sh}, THEME_DESKTOP_BASE);
+    /* A sparse grid gives the wallpaper depth without competing with
+     * windows or relying on gradients unavailable in the 8-bit palette. */
+    for (int x = 0; x < sw; x += 96)
+        line_v(x, TOPBAR_H, sh - TOPBAR_H, THEME_DESKTOP_DEEP);
+    for (int y = TOPBAR_H; y < sh; y += 96)
+        line_h(0, y, sw, THEME_DESKTOP_DEEP);
 }
 
-static struct rect ime_badge_rect(void) {
-    return (struct rect){sw - 54, 4, 42, 28};
+static struct rect topbar_launcher_rect(void) {
+    return (struct rect){8, 4, 118, 28};
+}
+
+static struct rect topbar_system_rect(void) {
+    int width = min_i(194, max_i(150, sw - 168));
+    return (struct rect){sw - width - 8, 4, width, 28};
+}
+
+static int hit_topbar_control_at(int x, int y) {
+    if (inside(x, y, topbar_launcher_rect()))
+        return 0;
+    if (inside(x, y, topbar_system_rect()))
+        return 1;
+    return -1;
+}
+
+static void update_clock_cache(void) {
+    if (clock_cache_valid && tick - clock_cache_tick < 60u)
+        return;
+    clock_cache_tick = tick;
+    time_t now = (time_t)time(0);
+    struct tm *value = gmtime(&now);
+    int32_t minute = now >= 0 ? (int32_t)(now / 60) : -1;
+    if (clock_cache_valid && minute == clock_cache_minute)
+        return;
+    clock_cache_minute = minute;
+    clock_cache_valid = 1;
+    if (now < 0 || !value ||
+        !strftime(clock_cache, sizeof(clock_cache), "%H:%M UTC", value) ||
+        !strftime(date_cache, sizeof(date_cache),
+                  "%A, %d %B %Y", value)) {
+        copy_text(clock_cache, "--:-- UTC", sizeof(clock_cache));
+        copy_text(date_cache, "Date unavailable", sizeof(date_cache));
+    }
+}
+
+static void format_clock(char *out, int capacity) {
+    update_clock_cache();
+    copy_text(out, clock_cache, capacity);
+}
+
+static void format_date(char *out, int capacity) {
+    update_clock_cache();
+    copy_text(out, date_cache, capacity);
 }
 
 static void draw_topbar(void) {
     fill((struct rect){0, 0, sw, TOPBAR_H}, THEME_TOPBAR);
     fill((struct rect){0, TOPBAR_H - 1, sw, 1}, THEME_TOPBAR_BORDER);
     int text_y = (TOPBAR_H - KFONT_HEIGHT) / 2 + PLT_FONT_Y_SHIFT;
-    text(14, text_y, "BuzzOS", THEME_ACCENT, -1);
+    struct rect launcher = topbar_launcher_rect();
+    int launcher_open = windows[WIN_LAUNCHER].visible &&
+                        !windows[WIN_LAUNCHER].minimized &&
+                        windows[WIN_LAUNCHER].active;
+    int launcher_hover = hover_topbar_control == 0;
+    int launcher_pressed = launcher_hover && (prev_buttons & 1);
+    if (launcher_open || launcher_hover)
+        fill_round(launcher,
+                   launcher_pressed ? THEME_WIN_PRESSED :
+                   launcher_open ? THEME_SELECTION_SOFT : THEME_WIN_HOVER);
+    fill_round((struct rect){launcher.x + 8, launcher.y + 9, 10, 10},
+               THEME_ACCENT_DIM);
+    fill((struct rect){launcher.x + 11, launcher.y + 12, 4, 4},
+         THEME_ACCENT);
+    text_clip(launcher.x + 24, text_y, "BuzzOS", THEME_ACCENT, -1,
+              launcher);
     const char *title = (focus >= 0 && focus < WIN_COUNT &&
                          windows[focus].visible &&
                          !windows[focus].minimized && windows[focus].title)
         ? windows[focus].title : "Desktop";
-    const char *display = sw >= 640 ? "VBE 32bpp" : "32bpp";
-    struct rect badge = ime_badge_rect();
-    int display_x = badge.x - gui_text_width(display) - 12;
-    if (display_x > 176)
-        text(display_x, text_y, display, THEME_TEXT_FAINT, -1);
-    int title_right = display_x > 176 ? display_x : badge.x - 8;
-    text_clip(120, text_y, title, THEME_TEXT_DIM, -1,
-              (struct rect){120, 3, max_i(1, title_right - 128),
+    struct rect status = topbar_system_rect();
+    line_v(132, 9, TOPBAR_H - 18, THEME_DIVIDER);
+    text_clip(140, text_y, title, THEME_TEXT, -1,
+              (struct rect){140, 3, max_i(1, status.x - 152),
                             TOPBAR_H - 6});
+
+    int status_hover = hover_topbar_control == 1;
+    int status_pressed = status_hover && (prev_buttons & 1);
+    int edge = control_center_open ? THEME_ACCENT :
+               status_hover ? THEME_ACCENT_DIM : THEME_DIVIDER;
+    int body = status_pressed ? THEME_WIN_PRESSED :
+               control_center_open ? THEME_SELECTION_SOFT :
+               status_hover ? THEME_WIN_HOVER : THEME_WIN_CONTROL;
+    fill_round(status, edge);
+    fill_round((struct rect){status.x + 1, status.y + 1,
+                             status.w - 2, status.h - 2}, body);
+    const char *mode = ime_enabled ? "ZH" : "EN";
+    char clock_text[24];
+    format_clock(clock_text, sizeof(clock_text));
+    int mode_w = gui_text_width(mode);
+    int clock_w = gui_text_width(clock_text);
+    int mode_x = status.x + 10;
+    int clock_x = status.x + status.w - clock_w - 10;
+    text_clip(mode_x, text_y, mode,
+              ime_enabled ? THEME_ACCENT : THEME_TEXT_DIM, -1, status);
+    int divider_x = mode_x + mode_w + 8;
+    if (divider_x + 8 < clock_x)
+        line_v(divider_x, status.y + 7, status.h - 14, THEME_DIVIDER);
+    text_clip(clock_x, text_y, clock_text, THEME_TEXT, -1, status);
 }
 
 static struct rect close_rect(int id);
@@ -1372,7 +1643,7 @@ static void draw_window_frame(int id) {
     struct rect r = w->r;
     shadow(r);
     fill_round_t(r, corner_outer,
-                 w->active ? THEME_WIN_BORDER_ACT : THEME_WIN_BORDER_INACT);
+                 w->active ? THEME_WIN_HOVER : THEME_WIN_CONTROL);
     fill_round_t((struct rect){r.x + 1, r.y + 1, r.w - 2, r.h - 2},
                  corner_inner, THEME_WIN_BODY);
     fill_round_top((struct rect){r.x + 1, r.y + 1, r.w - 2,
@@ -1380,7 +1651,10 @@ static void draw_window_frame(int id) {
                    corner_inner,
                    w->active ? THEME_TITLE_ACT : THEME_TITLE_INACT);
     line_h(r.x + 1, r.y + WINDOW_TITLE_H - 1, r.w - 2,
-           w->active ? THEME_ACCENT_SOFT : THEME_WIN_BORDER_INACT);
+           THEME_WIN_BORDER_INACT);
+    if (w->active)
+        line_h(r.x + 1, r.y + WINDOW_TITLE_H - 1,
+               min_i(112, r.w - 2), THEME_ACCENT_DIM);
     int title_y = r.y + (WINDOW_TITLE_H - KFONT_HEIGHT) / 2 +
                   PLT_FONT_Y_SHIFT;
     text_clip(r.x + 12, title_y, w->title,
@@ -1390,33 +1664,28 @@ static void draw_window_frame(int id) {
     struct rect mn = min_rect(id);
     struct rect mx = max_rect(id);
     struct rect cl = close_rect(id);
-    int idle = gray(3);
     int mn_hover = control_hovered(id, 0);
     int mx_hover = control_hovered(id, 1);
     int cl_hover = control_hovered(id, 2);
-    int mn_color = w->active || mn_hover ? THEME_MIN_YELLOW : idle;
-    int mx_color = w->active || mx_hover ? THEME_MAX_GREEN : idle;
-    int cl_color = w->active || cl_hover ? THEME_CLOSE_RED : idle;
-    if (mn_hover)
-        fill_circle(mn.x + 6, mn.y + 6, 6, THEME_WIN_HOVER);
-    if (mx_hover)
-        fill_circle(mx.x + 6, mx.y + 6, 6, THEME_WIN_HOVER);
-    if (cl_hover)
-        fill_circle(cl.x + 6, cl.y + 6, 6, THEME_WIN_HOVER);
-    if (mn_hover && (prev_buttons & 1))
-        mn_color = plt_blend(THEME_MIN_YELLOW, THEME_TITLE_ACT, 150);
-    if (mx_hover && (prev_buttons & 1))
-        mx_color = plt_blend(THEME_MAX_GREEN, THEME_TITLE_ACT, 150);
-    if (cl_hover && (prev_buttons & 1)) cl_color = THEME_DANGER_DIM;
-    fill_circle(mn.x + 6, mn.y + 6, 5, mn_color);
-    fill_circle(mx.x + 6, mx.y + 6, 5, mx_color);
-    fill_circle(cl.x + 6, cl.y + 6, 5, cl_color);
-    int glyph = plt_rgb(40, 20, 20);
-    line_h(mn.x + 4, mn.y + 6, 5, gray(0));
-    border((struct rect){mx.x + 4, mx.y + 4, 5, 5}, gray(0), gray(0));
+    int neutral = w->active ? THEME_WIN_CONTROL : THEME_TITLE_INACT;
+    int mn_bg = mn_hover ? THEME_WIN_HOVER : neutral;
+    int mx_bg = mx_hover ? THEME_WIN_HOVER : neutral;
+    int cl_bg = cl_hover ? THEME_DANGER_DIM : neutral;
+    if (mn_hover && (prev_buttons & 1)) mn_bg = THEME_WIN_PRESSED;
+    if (mx_hover && (prev_buttons & 1)) mx_bg = THEME_WIN_PRESSED;
+    if (cl_hover && (prev_buttons & 1)) cl_bg = THEME_DANGER;
+    fill_circle(mn.x + 6, mn.y + 6, 5, mn_bg);
+    fill_circle(mx.x + 6, mx.y + 6, 5, mx_bg);
+    fill_circle(cl.x + 6, cl.y + 6, 5, cl_bg);
+    int mn_glyph = mn_hover ? THEME_TEXT : THEME_TEXT_FAINT;
+    int mx_glyph = mx_hover ? THEME_TEXT : THEME_TEXT_FAINT;
+    int cl_glyph = cl_hover ? THEME_TEXT : THEME_TEXT_FAINT;
+    line_h(mn.x + 4, mn.y + 6, 5, mn_glyph);
+    border((struct rect){mx.x + 4, mx.y + 4, 5, 5},
+           mx_glyph, mx_glyph);
     for (int i = 0; i < 5; i++) {
-        pixel(cl.x + 4 + i, cl.y + 4 + i, glyph);
-        pixel(cl.x + 8 - i, cl.y + 4 + i, glyph);
+        pixel(cl.x + 4 + i, cl.y + 4 + i, cl_glyph);
+        pixel(cl.x + 8 - i, cl.y + 4 + i, cl_glyph);
     }
     if (!w->maximized) {
         for (int i = 0; i < 3; i++) {
@@ -1641,8 +1910,11 @@ static int content_width(int id) {
     if (id == WIN_LAUNCHER) {
         struct rect c = content_rect(id);
         int width = 120;
+        /* Keep primary labels revealable in narrow windows.  Secondary
+         * summaries clip instead of forcing a scrollbar at normal widths. */
         for (int i = 0; i < app_count; i++)
-            width = max_i(width, 42 + gui_text_width(apps[i].name));
+            if (launcher_app_matches(i))
+                width = max_i(width, 86 + gui_text_width(apps[i].name));
         return max_i(c.w, width);
     }
     if (id == WIN_STATUS)
@@ -1656,7 +1928,7 @@ static int content_height(int id) {
         return content_rect(id).h;
     if (id == WIN_LAUNCHER)
         return LAUNCHER_HEADER_H +
-               max_i(app_count, 1) * LAUNCHER_ROW_STEP + 12;
+               max_i(launcher_result_count(), 1) * LAUNCHER_ROW_STEP + 12;
     if (id == WIN_STATUS)
         return status_resolution_bottom();
     return 250;
@@ -1794,6 +2066,30 @@ static struct rect status_group_label_rect(int group_index) {
     return (struct rect){ox, oy + STATUS_RES_BODY_Y, c.w, DISPLAY_GROUP_LABEL_H};
 }
 
+static struct rect desktop_work_area(void) {
+    int dock_x, dock_y, dock_w, task_cap;
+    dock_geometry(&dock_x, &dock_y, &dock_w, &task_cap);
+    (void)dock_x;
+    (void)dock_w;
+    (void)task_cap;
+    return (struct rect){8, TOPBAR_H + 4, sw - 16,
+                         dock_y - TOPBAR_H - 10};
+}
+
+static struct rect snap_rect(int mode) {
+    struct rect work = desktop_work_area();
+    if (mode == WINDOW_SNAP_LEFT || mode == WINDOW_SNAP_RIGHT) {
+        int gap = 6;
+        int left_w = (work.w - gap) / 2;
+        int right_w = work.w - gap - left_w;
+        if (mode == WINDOW_SNAP_LEFT)
+            return (struct rect){work.x, work.y, left_w, work.h};
+        return (struct rect){work.x + left_w + gap, work.y,
+                             right_w, work.h};
+    }
+    return work;
+}
+
 static struct rect fit_window_rect(struct rect r, int old_sw, int old_sh,
                                    int dock_y) {
     if (old_sw > 0) {
@@ -1821,7 +2117,7 @@ static void relayout_after_mode_change(int old_sw, int old_sh) {
     int left_w = min_i(max_i(360, sw / 3), 620);
     int right_w = min_i(max_i(400, sw / 3), 620);
     int launcher_h = min_i(content_h,
-                           max_i(300, 126 + app_count * LAUNCHER_ROW_STEP));
+                           max_i(300, 134 + app_count * LAUNCHER_ROW_STEP));
     struct rect launcher = {margin, TOPBAR_H + margin, left_w, launcher_h};
     struct rect status = {
         sw - right_w - margin, TOPBAR_H + margin, right_w,
@@ -1830,21 +2126,27 @@ static void relayout_after_mode_change(int old_sw, int old_sh) {
     int dock_x, dock_y, dock_w, task_cap;
     dock_geometry(&dock_x, &dock_y, &dock_w, &task_cap);
     (void)dock_x; (void)dock_w; (void)task_cap;
-    struct rect work = {8, TOPBAR_H + 4, sw - 16,
-                        dock_y - TOPBAR_H - 10};
+    struct rect work = desktop_work_area();
 
     windows[WIN_LAUNCHER].restore = launcher;
-    windows[WIN_LAUNCHER].r = windows[WIN_LAUNCHER].maximized ? work : launcher;
+    windows[WIN_LAUNCHER].r = windows[WIN_LAUNCHER].maximized ? work :
+        windows[WIN_LAUNCHER].snap_mode != WINDOW_SNAP_NONE
+            ? snap_rect(windows[WIN_LAUNCHER].snap_mode) : launcher;
     windows[WIN_STATUS].restore = status;
-    windows[WIN_STATUS].r = windows[WIN_STATUS].maximized ? work : status;
+    windows[WIN_STATUS].r = windows[WIN_STATUS].maximized ? work :
+        windows[WIN_STATUS].snap_mode != WINDOW_SNAP_NONE
+            ? snap_rect(windows[WIN_STATUS].snap_mode) : status;
 
     for (int slot = 0; slot < MAX_GUI_APPS; slot++) {
         int id = WIN_APP_BASE + slot;
-        struct rect restore = windows[id].maximized ? windows[id].restore
-                                                     : windows[id].r;
+        int arranged = windows[id].maximized ||
+                       windows[id].snap_mode != WINDOW_SNAP_NONE;
+        struct rect restore = arranged ? windows[id].restore : windows[id].r;
         restore = fit_window_rect(restore, old_sw, old_sh, dock_y);
         windows[id].restore = restore;
-        windows[id].r = windows[id].maximized ? work : restore;
+        windows[id].r = windows[id].maximized ? work :
+            windows[id].snap_mode != WINDOW_SNAP_NONE
+                ? snap_rect(windows[id].snap_mode) : restore;
         if (app_sessions[slot].used) {
             app_sessions[slot].resize_dirty = 1;
             (void)sync_app_size(id, 1);
@@ -1856,8 +2158,11 @@ static void relayout_after_mode_change(int old_sw, int old_sh) {
     pointer_y = clamp_i(pointer_y, 0, sh - 1);
     compose_clip = (struct rect){0, 0, sw, sh};
     context_open = 0;
+    control_center_open = 0;
     dock_expanded = 0;
     drag_win = -1;
+    drag_moved = 0;
+    snap_preview_mode = WINDOW_SNAP_NONE;
     resize_win = -1;
     scroll_drag_win = -1;
     app_mouse_capture = -1;
@@ -1865,6 +2170,7 @@ static void relayout_after_mode_change(int old_sw, int old_sh) {
     hover_chrome_win = -1;
     hover_chrome_ctl = -1;
     hover_launcher_row = -1;
+    hover_topbar_control = -1;
     pending_damage_valid = 0;
     desktop_dirty = 1;
 }
@@ -1977,50 +2283,143 @@ static void draw_launcher(void) {
     /* Same content clip as System: row fills must not paint past the body. */
     struct rect saved_clip = compose_clip_push(c);
     struct rect clip = c;
-    int ox = c.x - scroll_x[WIN_LAUNCHER];
-    int oy = c.y - scroll_y[WIN_LAUNCHER];
-    text_clip(ox, oy, "Installed", THEME_ACCENT, -1, clip);
-    int y = oy + LAUNCHER_HEADER_H;
+    int result_count = launcher_result_count();
+    const char *heading = launcher_query_length > 0 ? "Results" : "All apps";
+    text_clip(c.x, c.y + 2, heading, THEME_ACCENT, -1, clip);
+    char count_label[32];
+    count_label[0] = 0;
+    append_uint(count_label, (unsigned int)result_count, sizeof(count_label));
+    if (launcher_query_length > 0) {
+        append_text(count_label, " of ", sizeof(count_label));
+        append_uint(count_label, (unsigned int)app_count, sizeof(count_label));
+    } else {
+        append_text(count_label, app_count == 1 ? " app" : " apps",
+                    sizeof(count_label));
+    }
+    int badge_w = gui_text_width(count_label) + 18;
+    struct rect badge = {c.x + c.w - badge_w - 4, c.y - 1,
+                         badge_w, 32};
+    if (c.x + gui_text_width(heading) + 12 <= badge.x) {
+        fill_round(badge, THEME_DIVIDER);
+        fill_round((struct rect){badge.x + 1, badge.y + 1,
+                                 badge.w - 2, badge.h - 2},
+                   THEME_PANEL_RAISED);
+        text_clip(badge.x + 9, badge.y + 2 + PLT_FONT_Y_SHIFT,
+                  count_label, THEME_TEXT_DIM, -1, clip);
+    }
+    struct rect search = {c.x, c.y + 36, c.w - 4, 34};
+    fill_round(search, windows[WIN_LAUNCHER].active
+               ? THEME_FOCUS : THEME_FIELD_BORDER);
+    fill_round((struct rect){search.x + 1, search.y + 1,
+                             search.w - 2, search.h - 2},
+               THEME_FIELD_BG);
+    const char *search_text = launcher_query_length > 0
+        ? launcher_query : "Search apps";
+    int search_y = search.y + (search.h - KFONT_HEIGHT) / 2 +
+                   PLT_FONT_Y_SHIFT;
+    text_clip(search.x + 12, search_y, search_text,
+              launcher_query_length > 0 ? THEME_TEXT : THEME_TEXT_FAINT,
+              -1, (struct rect){search.x + 8, search.y + 2,
+                                search.w - 16, search.h - 4});
+    if (windows[WIN_LAUNCHER].active && launcher_query_length > 0) {
+        int caret_x = min_i(search.x + search.w - 10,
+                            search.x + 12 +
+                            gui_text_width(launcher_query));
+        line_v(caret_x, search.y + 8, search.h - 16, THEME_FOCUS);
+    }
+    struct rect list_clip = {
+        c.x, c.y + LAUNCHER_HEADER_H,
+        c.w, max_i(0, c.h - LAUNCHER_HEADER_H)
+    };
+    int y = c.y + LAUNCHER_HEADER_H + 14;
     if (app_count == 0) {
-        text_clip(ox, y, "No apps in /fs/apps", THEME_TEXT_DIM, -1, clip);
+        text_clip(c.x + 10, y, "No apps are installed",
+                  THEME_TEXT_DIM, -1, list_clip);
+        text_clip(c.x + 10, y + 28, "Add manifests under /fs/apps",
+                  THEME_TEXT_FAINT, -1, list_clip);
+        compose_clip_pop(saved_clip);
+        draw_scrollbars(WIN_LAUNCHER);
+        return;
+    }
+    if (result_count == 0) {
+        text_clip(c.x + 10, y, "No applications match",
+                  THEME_TEXT_DIM, -1, list_clip);
+        text_clip(c.x + 10, y + 28, "Backspace or Esc to clear search",
+                  THEME_TEXT_FAINT, -1, list_clip);
         compose_clip_pop(saved_clip);
         draw_scrollbars(WIN_LAUNCHER);
         return;
     }
     int hover_row = hit_launcher_row_at(pointer_x, pointer_y);
-    for (int i = 0; i < app_count; i++) {
-        struct rect row = launcher_row_paint_rect(i);
-        struct rect visible = intersect_rect(row, clip);
+    struct rect saved_list_clip = compose_clip_push(list_clip);
+    for (int result = 0; result < result_count; result++) {
+        int i = launcher_app_at_result(result);
+        struct rect row = launcher_row_paint_rect(result);
+        struct rect visible = intersect_rect(row, list_clip);
         if (visible.w <= 0 || visible.h <= 0)
             continue;
         int selected = i == app_selected;
         int hovered = i == hover_row;
         if (selected) {
             struct rect sel = intersect_rect(
-                (struct rect){row.x, row.y, row.w - 6, row.h}, clip);
-            if (sel.w > 0 && sel.h > 0)
+                (struct rect){row.x, row.y, row.w - 6, row.h}, list_clip);
+            if (sel.w > 0 && sel.h > 0) {
                 fill_round(sel, THEME_SELECTION_SOFT);
+                fill((struct rect){row.x, row.y + 8, 3, row.h - 16},
+                     THEME_ACCENT);
+            }
         } else if (hovered) {
             struct rect hover = intersect_rect(
-                (struct rect){row.x, row.y, row.w - 6, row.h}, clip);
+                (struct rect){row.x, row.y, row.w - 6, row.h}, list_clip);
             if (hover.w > 0 && hover.h > 0)
-                fill_round(hover, THEME_WIN_HOVER);
+                fill_round(hover, THEME_PANEL_RAISED);
         }
-        struct rect icon = intersect_rect(
-            (struct rect){row.x + 8, row.y + 9, 18, 18}, clip);
-        if (icon.w > 0 && icon.h > 0) {
-            fill_round(icon, selected ? THEME_ACCENT : THEME_FIELD_BORDER);
-            struct rect icon_fill = intersect_rect(
-                (struct rect){row.x + 11, row.y + 12, 12, 12}, clip);
-            if (icon_fill.w > 0 && icon_fill.h > 0)
-                fill_round(icon_fill, launcher_icon_color(apps[i].path));
-        }
-        int text_y = row.y + (row.h - KFONT_HEIGHT) / 2 + PLT_FONT_Y_SHIFT;
-        text_clip(row.x + 40, text_y, apps[i].name,
-                  selected || hovered ? THEME_TEXT : THEME_TEXT_DIM, -1, clip);
+        struct rect icon = {row.x + 10, row.y + 13, 32, 32};
+        fill_round(icon, selected ? THEME_ACCENT : THEME_FIELD_BORDER);
+        fill_round((struct rect){icon.x + 2, icon.y + 2,
+                                 icon.w - 4, icon.h - 4},
+                   launcher_icon_color(apps[i].path));
+        char monogram[2] = {apps[i].name[0] ? apps[i].name[0] : '?', 0};
+        int mono_w = gui_text_width(monogram);
+        text_clip(icon.x + (icon.w - mono_w) / 2,
+                  icon.y + (icon.h - KFONT_HEIGHT) / 2 + PLT_FONT_Y_SHIFT,
+                  monogram, THEME_TEXT, -1, list_clip);
+        int tx = row.x + 54;
+        text_clip(tx, row.y + 4 + PLT_FONT_Y_SHIFT, apps[i].name,
+                  selected || hovered ? THEME_TEXT : THEME_TEXT_DIM, -1,
+                  intersect_rect(
+                      (struct rect){tx, row.y, max_i(1, row.w - 66), row.h},
+                      list_clip));
+        text_clip(tx, row.y + 30 + PLT_FONT_Y_SHIFT, apps[i].summary,
+                  selected ? THEME_TEXT_DIM : THEME_TEXT_FAINT, -1,
+                  intersect_rect(
+                      (struct rect){tx, row.y, max_i(1, row.w - 66), row.h},
+                      list_clip));
     }
+    compose_clip_pop(saved_list_clip);
     compose_clip_pop(saved_clip);
     draw_scrollbars(WIN_LAUNCHER);
+}
+
+static void draw_status_shortcut(int x, int y, int available_w,
+                                 const char *key, const char *label,
+                                 struct rect clip) {
+    int key_w = min_i(available_w, max_i(60, gui_text_width(key) + 18));
+    int label_w = gui_text_width(label);
+    int show_label = key_w + 12 + label_w <= available_w;
+    struct rect cap = {x, y, key_w, 28};
+    fill_round(cap, THEME_DIVIDER);
+    fill_round((struct rect){cap.x + 1, cap.y + 1,
+                             cap.w - 2, cap.h - 2},
+               THEME_WIN_CONTROL);
+    int key_x = cap.x + max_i(6, (cap.w - gui_text_width(key)) / 2);
+    text_clip(key_x, cap.y + PLT_FONT_Y_SHIFT, key, THEME_TEXT, -1,
+              intersect_rect(cap, clip));
+    if (show_label)
+        text_clip(cap.x + cap.w + 12, cap.y + PLT_FONT_Y_SHIFT, label,
+                  THEME_TEXT_DIM, -1,
+                  (struct rect){cap.x + cap.w + 12, cap.y,
+                                available_w - cap.w - 12, cap.h});
 }
 
 static void draw_status(void) {
@@ -2038,7 +2437,24 @@ static void draw_status(void) {
     int ox = c.x - scroll_x[WIN_STATUS];
     int oy = c.y - scroll_y[WIN_STATUS];
     char line[96];
-    text_clip(ox, oy, "Display", THEME_ACCENT, -1, clip);
+    text_clip(ox, oy, "System overview", THEME_ACCENT, -1, clip);
+    struct rect display_card = {ox, oy + 34, c.w - 4, 88};
+    fill_round(display_card, THEME_DIVIDER);
+    fill_round((struct rect){display_card.x + 1, display_card.y + 1,
+                             display_card.w - 2, display_card.h - 2},
+               THEME_PANEL_RAISED);
+    text_clip(display_card.x + 12, display_card.y + 4 + PLT_FONT_Y_SHIFT,
+              "Display", THEME_TEXT_FAINT, -1, clip);
+    char app_label[32];
+    app_label[0] = 0;
+    append_uint(app_label, (unsigned int)app_count, sizeof(app_label));
+    append_text(app_label, app_count == 1 ? " app" : " apps",
+                sizeof(app_label));
+    int app_label_w = gui_text_width(app_label);
+    int app_label_x = display_card.x + display_card.w - app_label_w - 12;
+    if (display_card.x + 12 + gui_text_width("Display") + 12 <= app_label_x)
+        text_clip(app_label_x, display_card.y + 4 + PLT_FONT_Y_SHIFT,
+                  app_label, THEME_TEXT_DIM, -1, clip);
     copy_text(line, "resolution ", sizeof(line));
     append_uint(line, (unsigned int)sw, sizeof(line));
     append_text(line, " x ", sizeof(line));
@@ -2046,19 +2462,22 @@ static void draw_status(void) {
     append_text(line, "  (", sizeof(line));
     append_aspect(line, sizeof(line), sw, sh);
     append_text(line, ")", sizeof(line));
-    text_clip(ox, oy + 32, line, THEME_TEXT_DIM, -1, clip);
-    text_clip(ox, oy + 60,
+    text_clip(display_card.x + 12,
+              display_card.y + 30 + PLT_FONT_Y_SHIFT,
+              line, THEME_TEXT, -1, clip);
+    text_clip(display_card.x + 12,
+              display_card.y + 56 + PLT_FONT_Y_SHIFT,
               display_backend == GFX_BACKEND_VIRTIO_GPU_2D
                   ? "VirtIO GPU 2D / 32bpp"
                   : "Bochs VBE / 32bpp",
               THEME_TEXT_FAINT, -1, clip);
-    copy_text(line, "apps ", sizeof(line));
-    append_uint(line, (unsigned int)app_count, sizeof(line));
-    text_clip(ox, oy + 88, line, THEME_TEXT_DIM, -1, clip);
-    text_clip(ox, oy + 120, "Controls", THEME_ACCENT, -1, clip);
-    text_clip(ox, oy + 150, "Ctrl+Space toggles IME", THEME_TEXT_DIM, -1, clip);
-    text_clip(ox, oy + 178, "[ ] cycle resolution", THEME_TEXT_DIM, -1, clip);
-    text_clip(ox, oy + 206, "Esc returns to shell", THEME_TEXT_DIM, -1, clip);
+    text_clip(ox, oy + 138, "Keyboard", THEME_ACCENT, -1, clip);
+    draw_status_shortcut(ox, oy + 166, c.w - 4,
+                         "Ctrl+Space", "Toggle IME", clip);
+    draw_status_shortcut(ox, oy + 196, c.w - 4,
+                         "[ / ]", "Display mode", clip);
+    draw_status_shortcut(ox, oy + 226, c.w - 4,
+                         "Ctrl+Alt+Esc", "Console", clip);
     int mode_error = mode_error_until && tick < mode_error_until;
     text_clip(ox, oy + STATUS_RES_HEAD_Y,
               mode_error ? "Resolution unavailable" : "Resolution by aspect",
@@ -2167,10 +2586,17 @@ static void dock_geometry(int *x, int *y, int *dock_w, int *task_cap) {
 }
 
 static void draw_dock_tooltip(void) {
-    if (dock_hover < WIN_APP_BASE || dock_hover >= WIN_COUNT ||
-        !windows[dock_hover].visible)
+    if (!dock_tooltip_visible || dock_hover < 0 ||
+        dock_hover > WIN_COUNT)
         return;
-    const char *title = windows[dock_hover].title;
+    const char *title;
+    if (dock_hover == WIN_COUNT) {
+        title = dock_expanded ? "Hide applications" : "More applications";
+    } else {
+        if (!windows[dock_hover].visible)
+            return;
+        title = windows[dock_hover].title;
+    }
     int tw = min_i(sw - 16, gui_text_width(title) + 24);
     int tx = clamp_i(pointer_x - tw / 2, 8, sw - tw - 8);
     int ty = sh - 116;
@@ -2181,6 +2607,37 @@ static void draw_dock_tooltip(void) {
     int text_y = tip.y + (tip.h - KFONT_HEIGHT) / 2 + PLT_FONT_Y_SHIFT;
     text_clip(tip.x + 12, text_y, title, THEME_TEXT, -1,
               (struct rect){tip.x + 5, tip.y + 2, tip.w - 10, tip.h - 4});
+}
+
+static void draw_dock_tile(struct rect b, int id, const char *label,
+                           int icon_color) {
+    int active = id >= 0 && id < WIN_COUNT && windows[id].active &&
+                 !windows[id].minimized;
+    int hovered = dock_hover == id;
+    int pressed = hovered && (prev_buttons & 1);
+    if (active)
+        fill_round(b, pressed ? THEME_WIN_PRESSED : THEME_SELECTION_SOFT);
+    else if (hovered)
+        fill_round(b, pressed ? THEME_WIN_PRESSED : THEME_WIN_HOVER);
+
+    struct rect icon = {b.x + (b.w - 30) / 2, b.y + 4, 30, 30};
+    fill_round(icon, active ? THEME_ACCENT : THEME_FIELD_BORDER);
+    fill_round((struct rect){icon.x + 2, icon.y + 2, icon.w - 4, icon.h - 4},
+               icon_color);
+    char monogram[2] = {
+        label && label[0] ? label[0] : '?',
+        0
+    };
+    int mono_w = gui_text_width(monogram);
+    text_clip(icon.x + (icon.w - mono_w) / 2,
+              icon.y + (icon.h - KFONT_HEIGHT) / 2 + PLT_FONT_Y_SHIFT,
+              monogram, THEME_TEXT, -1, icon);
+
+    if (active)
+        fill_round((struct rect){b.x + 11, b.y + b.h - 3,
+                                 b.w - 22, 3}, THEME_ACCENT);
+    else if (id >= WIN_APP_BASE && id < WIN_COUNT)
+        fill_circle(b.x + b.w / 2, b.y + b.h - 2, 2, THEME_TEXT_FAINT);
 }
 
 static void draw_dock(void) {
@@ -2201,9 +2658,9 @@ static void draw_dock(void) {
     for (int i = 0; i < WIN_APP_BASE; i++) {
         struct rect b = {x + 12 + i * DOCK_SYSTEM_STEP, y + 10,
                          DOCK_SYSTEM_W, 40};
-        const char *label = windows[i].dock_label
-            ? windows[i].dock_label : windows[i].title;
-        button(b, label, windows[i].active);
+        int icon_color = i == WIN_LAUNCHER
+            ? THEME_WIN_BORDER_ACT : THEME_MAX_GREEN;
+        draw_dock_tile(b, i, windows[i].title, icon_color);
     }
 
     int shown = min_i(app_total, task_cap);
@@ -2214,17 +2671,32 @@ static void draw_dock(void) {
         int id = ids[i];
         struct rect b = {task_x + i * DOCK_TASK_STEP, y + 10,
                          DOCK_TASK_W, 40};
-        button(b, windows[id].title, windows[id].active);
-        if (windows[id].active)
-            fill_circle(b.x + b.w / 2, y + 55, 2, THEME_ACCENT);
+        draw_dock_tile(b, id, windows[id].title,
+                       launcher_icon_color(windows[id].title));
     }
     int hidden = app_total - shown;
     if (hidden <= 0)
         dock_expanded = 0;
     if (hidden > 0) {
         int more_x = task_x + shown * DOCK_TASK_STEP;
-        button((struct rect){more_x, y + 10, DOCK_MORE_W, 40},
-               dock_expanded ? "Hide" : "More", dock_expanded);
+        struct rect more = {more_x, y + 10, DOCK_MORE_W, 40};
+        int hovered = dock_hover == WIN_COUNT;
+        if (dock_expanded)
+            fill_round(more, THEME_SELECTION_SOFT);
+        else if (hovered)
+            fill_round(more, (prev_buttons & 1)
+                       ? THEME_WIN_PRESSED : THEME_WIN_HOVER);
+        struct rect more_icon = {more.x + 8, more.y + 4, 30, 30};
+        fill_round(more_icon, THEME_FIELD_BORDER);
+        fill_round((struct rect){more_icon.x + 2, more_icon.y + 2,
+                                 more_icon.w - 4, more_icon.h - 4},
+                   THEME_WIN_CONTROL);
+        const char *mark = dock_expanded ? "-" : "+";
+        int mark_w = gui_text_width(mark);
+        text_clip(more_icon.x + (more_icon.w - mark_w) / 2,
+                  more_icon.y + (more_icon.h - KFONT_HEIGHT) / 2 +
+                      PLT_FONT_Y_SHIFT,
+                  mark, THEME_TEXT, -1, more_icon);
     }
 
     if (dock_expanded && hidden > 0) {
@@ -2470,15 +2942,6 @@ static struct rect get_caret_area(void) {
 }
 
 static void draw_ime(void) {
-    const char *mode = ime_enabled ? "中" : "英";
-    struct rect badge = ime_badge_rect();
-    fill_round(badge, ime_enabled ? THEME_ACCENT_DIM : THEME_WIN_CONTROL);
-    int mode_w = gui_text_width(mode);
-    int mode_y = badge.y + (badge.h - KFONT_HEIGHT) / 2 + PLT_FONT_Y_SHIFT;
-    text_clip(badge.x + (badge.w - mode_w) / 2, mode_y, mode,
-              THEME_TEXT, -1,
-              (struct rect){badge.x + 2, badge.y + 1,
-                            badge.w - 4, badge.h - 2});
     if (!ime_enabled || ime_length == 0)
         return;
 
@@ -2547,11 +3010,222 @@ static void draw_context_menu(void) {
                              menu.w - 2, menu.h - 2}, THEME_WIN_BODY);
     for (int i = 0; i < 3; i++) {
         int disabled = i == 1 && !clipboard[0];
-        button_state((struct rect){menu.x + 4,
-                                   menu.y + 4 + i * CONTEXT_ITEM_STEP,
-                                   menu.w - 8, CONTEXT_ITEM_H},
-                     labels[i], 0, disabled);
+        struct rect item = {menu.x + 6,
+                            menu.y + 6 + i * CONTEXT_ITEM_STEP,
+                            menu.w - 12, CONTEXT_ITEM_H};
+        int hovered = !disabled && inside(pointer_x, pointer_y, item);
+        if (hovered)
+            fill_round(item, THEME_WIN_HOVER);
+        int ty = item.y + (item.h - KFONT_HEIGHT) / 2 + PLT_FONT_Y_SHIFT;
+        int fg = disabled ? THEME_TEXT_FAINT :
+                 hovered ? THEME_TEXT : THEME_TEXT_DIM;
+        text_clip(item.x + 12, ty, labels[i], fg, -1,
+                  (struct rect){item.x + 8, item.y + 2,
+                                item.w - 16, item.h - 4});
     }
+}
+
+static struct rect control_center_rect(void) {
+    int width = min_i(CONTROL_CENTER_W, sw - 24);
+    int height = min_i(CONTROL_CENTER_H, sh - TOPBAR_H - 16);
+    return (struct rect){sw - width - 12, TOPBAR_H + 8, width, height};
+}
+
+static struct rect control_center_item_rect(int index) {
+    struct rect panel = control_center_rect();
+    int gap = 8;
+    int inner_x = panel.x + 14;
+    int inner_w = panel.w - 28;
+    int half_w = (inner_w - gap) / 2;
+    if (index == 0)
+        return (struct rect){inner_x, panel.y + 156, half_w, 62};
+    if (index == 1)
+        return (struct rect){inner_x + half_w + gap, panel.y + 156,
+                             inner_w - half_w - gap, 62};
+    return (struct rect){inner_x, panel.y + 230, inner_w, 62};
+}
+
+static int hit_control_center_item_at(int x, int y) {
+    if (!control_center_open)
+        return -1;
+    for (int i = 0; i < CONTROL_CENTER_ITEM_COUNT; i++) {
+        if (inside(x, y, control_center_item_rect(i)))
+            return i;
+    }
+    return -1;
+}
+
+static int running_app_count(void) {
+    int count = 0;
+    for (int slot = 0; slot < MAX_GUI_APPS; slot++) {
+        if (app_sessions[slot].used)
+            count++;
+    }
+    return count;
+}
+
+static void draw_control_center_tile(int index, const char *monogram,
+                                     const char *label,
+                                     const char *detail) {
+    struct rect tile = control_center_item_rect(index);
+    int hovered = inside(pointer_x, pointer_y, tile);
+    int pressed = hovered && (prev_buttons & 1);
+    int selected = index == control_center_selected;
+    int edge = selected ? THEME_ACCENT :
+               hovered ? THEME_ACCENT_DIM : THEME_DIVIDER;
+    int body = pressed ? THEME_WIN_PRESSED :
+               selected ? THEME_SELECTION_SOFT :
+               hovered ? THEME_WIN_HOVER : THEME_PANEL_RAISED;
+    fill_round(tile, edge);
+    fill_round((struct rect){tile.x + 1, tile.y + 1,
+                             tile.w - 2, tile.h - 2}, body);
+    struct rect icon = {tile.x + 10, tile.y + 16, 30, 30};
+    fill_round(icon, selected ? THEME_ACCENT : THEME_FIELD_BORDER);
+    fill_round((struct rect){icon.x + 2, icon.y + 2,
+                             icon.w - 4, icon.h - 4},
+               index == 0 && ime_enabled ? THEME_ACCENT_DIM :
+               index == 2 ? THEME_MAX_GREEN : THEME_WIN_CONTROL);
+    int monogram_w = gui_text_width(monogram);
+    text_clip(icon.x + (icon.w - monogram_w) / 2,
+              icon.y + (icon.h - KFONT_HEIGHT) / 2 + PLT_FONT_Y_SHIFT,
+              monogram, THEME_TEXT, -1, icon);
+    struct rect text_clip_area = {
+        tile.x + 48, tile.y + 2, tile.w - 56, tile.h - 4
+    };
+    text_clip(tile.x + 48, tile.y + 5 + PLT_FONT_Y_SHIFT,
+              label, THEME_TEXT, -1, text_clip_area);
+    text_clip(tile.x + 48, tile.y + 31 + PLT_FONT_Y_SHIFT,
+              detail, selected ? THEME_TEXT_DIM : THEME_TEXT_FAINT,
+              -1, text_clip_area);
+}
+
+static void draw_control_center(void) {
+    if (!control_center_open)
+        return;
+    struct rect panel = control_center_rect();
+    shadow(panel);
+    fill_round_t(panel, corner_outer, THEME_FIELD_BORDER);
+    fill_round_t((struct rect){panel.x + 1, panel.y + 1,
+                               panel.w - 2, panel.h - 2},
+                 corner_inner, THEME_WIN_BODY);
+    line_h(panel.x + 6, panel.y + 1, panel.w - 12, THEME_ACCENT_DIM);
+    struct rect clip = {panel.x + 10, panel.y + 4,
+                        panel.w - 20, panel.h - 8};
+    char clock_text[24];
+    char date_text[48];
+    format_clock(clock_text, sizeof(clock_text));
+    format_date(date_text, sizeof(date_text));
+    text_clip(panel.x + 16, panel.y + 14 + PLT_FONT_Y_SHIFT,
+              "System", THEME_TEXT, -1, clip);
+    int clock_w = gui_text_width(clock_text);
+    text_clip(panel.x + panel.w - clock_w - 16,
+              panel.y + 14 + PLT_FONT_Y_SHIFT,
+              clock_text, THEME_ACCENT, -1, clip);
+    text_clip(panel.x + 16, panel.y + 44 + PLT_FONT_Y_SHIFT,
+              date_text, THEME_TEXT_DIM, -1, clip);
+
+    struct rect status = {panel.x + 14, panel.y + 78,
+                          panel.w - 28, 64};
+    fill_round(status, THEME_DIVIDER);
+    fill_round((struct rect){status.x + 1, status.y + 1,
+                             status.w - 2, status.h - 2},
+               THEME_PANEL_RAISED);
+    char display_line[64];
+    display_line[0] = 0;
+    append_uint(display_line, (unsigned int)sw, sizeof(display_line));
+    append_text(display_line, " x ", sizeof(display_line));
+    append_uint(display_line, (unsigned int)sh, sizeof(display_line));
+    text_clip(status.x + 12, status.y + 5 + PLT_FONT_Y_SHIFT,
+              display_line, THEME_TEXT, -1, status);
+    const char *backend = display_backend == GFX_BACKEND_VIRTIO_GPU_2D
+        ? "VirtIO GPU 2D" : "Linear framebuffer";
+    text_clip(status.x + 12, status.y + 32 + PLT_FONT_Y_SHIFT,
+              backend, THEME_TEXT_FAINT, -1, status);
+    char running_label[32];
+    running_label[0] = 0;
+    append_uint(running_label, (unsigned int)running_app_count(),
+                sizeof(running_label));
+    append_text(running_label,
+                running_app_count() == 1 ? " app" : " apps",
+                sizeof(running_label));
+    int running_w = gui_text_width(running_label);
+    int running_x = status.x + status.w - running_w - 12;
+    text_clip(running_x, status.y + 5 + PLT_FONT_Y_SHIFT,
+              running_label, THEME_TEXT_DIM, -1, status);
+
+    draw_control_center_tile(0, ime_enabled ? "Z" : "E", "Input",
+                             ime_enabled ? "Chinese" : "English");
+    draw_control_center_tile(1, "S", "Settings", "Display");
+    draw_control_center_tile(2, "M", "System Monitor",
+                             "Processes & usage");
+    text_clip(panel.x + 16, panel.y + 292 + PLT_FONT_Y_SHIFT,
+              "Arrows / Enter / Esc", THEME_TEXT_FAINT, -1, clip);
+}
+
+static void toggle_ime_mode(void) {
+    ime_enabled = !ime_enabled;
+    ime_length = 0;
+    ime_buffer[0] = 0;
+    ime_page = 0;
+    ime_cand_count = 0;
+    ime_damage();
+    desktop_dirty = 1;
+}
+
+static void close_control_center(void) {
+    if (!control_center_open)
+        return;
+    control_center_open = 0;
+    desktop_dirty = 1;
+}
+
+static void toggle_control_center(void) {
+    control_center_open = !control_center_open;
+    control_center_selected = 0;
+    context_open = 0;
+    dock_expanded = 0;
+    desktop_dirty = 1;
+}
+
+static void toggle_launcher(void) {
+    close_control_center();
+    context_open = 0;
+    dock_expanded = 0;
+    if (windows[WIN_LAUNCHER].visible &&
+        !windows[WIN_LAUNCHER].minimized &&
+        windows[WIN_LAUNCHER].active) {
+        launcher_query_length = 0;
+        launcher_query[0] = 0;
+        launcher_select_first_result();
+        minimize_window(WIN_LAUNCHER);
+    } else {
+        activate(WIN_LAUNCHER);
+    }
+    desktop_dirty = 1;
+}
+
+static void activate_control_center_item(int index) {
+    if (index == 0) {
+        toggle_ime_mode();
+        return;
+    }
+    close_control_center();
+    if (index == 1)
+        activate(WIN_STATUS);
+    else if (index == 2)
+        run_app("/fs/apps/taskmanager");
+}
+
+static void draw_snap_preview(void) {
+    if (drag_win < 0 || !drag_moved ||
+        snap_preview_mode == WINDOW_SNAP_NONE)
+        return;
+    struct rect target = snap_rect(snap_preview_mode);
+    border(target, THEME_ACCENT, THEME_ACCENT);
+    if (target.w > 4 && target.h > 4)
+        border((struct rect){target.x + 2, target.y + 2,
+                             target.w - 4, target.h - 4},
+               THEME_ACCENT_DIM, THEME_ACCENT_DIM);
 }
 
 static void draw_pointer(void) {
@@ -2583,7 +3257,9 @@ static void compose_scene(void) {
         else if (id >= WIN_APP_BASE)
             draw_app_window(id);
     }
+    draw_snap_preview();
     draw_dock();
+    draw_control_center();
     draw_ime();
     draw_context_menu();
     draw_pointer();
@@ -2878,28 +3554,60 @@ static void reap_dead_apps(void) {
     }
 }
 
-static void toggle_maximize(int id) {
-    if (id < 0 || id >= WIN_COUNT)
-        return;
-    if (windows[id].maximized) {
-        windows[id].r = windows[id].restore;
-        windows[id].maximized = 0;
-    } else {
-        int dock_x, dock_y, dock_w, task_cap;
-        dock_geometry(&dock_x, &dock_y, &dock_w, &task_cap);
-        windows[id].restore = windows[id].r;
-        /* Keep maximized content inside the desktop work area instead of
-         * extending underneath the Deck. */
-        windows[id].r = (struct rect){8, TOPBAR_H + 4, sw - 16,
-                                     dock_y - TOPBAR_H - 10};
-        windows[id].maximized = 1;
-    }
+static void finish_window_geometry(int id) {
     clamp_scroll(id);
     int slot = app_slot_for_win(id);
     if (slot >= 0 && app_sessions[slot].used) {
         app_sessions[slot].resize_dirty = 1;
         (void)sync_app_size(id, 1);
     }
+    desktop_dirty = 1;
+}
+
+static void restore_window(int id) {
+    if (id < 0 || id >= WIN_COUNT)
+        return;
+    if (!windows[id].maximized &&
+        windows[id].snap_mode == WINDOW_SNAP_NONE)
+        return;
+    windows[id].r = windows[id].restore;
+    windows[id].maximized = 0;
+    windows[id].snap_mode = WINDOW_SNAP_NONE;
+    finish_window_geometry(id);
+}
+
+static void maximize_window(int id) {
+    if (id < 0 || id >= WIN_COUNT)
+        return;
+    if (!windows[id].maximized &&
+        windows[id].snap_mode == WINDOW_SNAP_NONE)
+        windows[id].restore = windows[id].r;
+    windows[id].r = snap_rect(WINDOW_SNAP_MAXIMIZE);
+    windows[id].maximized = 1;
+    windows[id].snap_mode = WINDOW_SNAP_NONE;
+    finish_window_geometry(id);
+}
+
+static void snap_window(int id, int mode) {
+    if (id < 0 || id >= WIN_COUNT ||
+        (mode != WINDOW_SNAP_LEFT && mode != WINDOW_SNAP_RIGHT))
+        return;
+    if (!windows[id].maximized &&
+        windows[id].snap_mode == WINDOW_SNAP_NONE)
+        windows[id].restore = windows[id].r;
+    windows[id].r = snap_rect(mode);
+    windows[id].maximized = 0;
+    windows[id].snap_mode = mode;
+    finish_window_geometry(id);
+}
+
+static void toggle_maximize(int id) {
+    if (id < 0 || id >= WIN_COUNT)
+        return;
+    if (windows[id].maximized)
+        restore_window(id);
+    else
+        maximize_window(id);
 }
 
 static int hit_scrollbar(int x, int y, int *axis_out) {
@@ -3114,9 +3822,7 @@ static const char *ime_punctuation(int k) {
 /* Returns non-zero when the desktop IME consumed the key. */
 static int ime_handle_key(int k) {
     if (k == 0x1F) { /* Ctrl+Space from the keyboard driver */
-        ime_enabled = !ime_enabled;
-        ime_clear();
-        ime_damage();
+        toggle_ime_mode();
         return 1;
     }
     if (!ime_enabled || !ime_target_active())
@@ -3195,17 +3901,132 @@ static void activate_next_visible(void) {
     }
 }
 
-static void handle_key(int k) {
-    if (ime_handle_key(k))
+static void activate_previous_visible(void) {
+    for (int step = 1; step <= WIN_COUNT; step++) {
+        int id = focus - step;
+        while (id < 0)
+            id += WIN_COUNT;
+        if (!windows[id].visible || windows[id].minimized)
+            continue;
+        if (id >= WIN_APP_BASE && !app_sessions[id - WIN_APP_BASE].used)
+            continue;
+        activate(id);
         return;
-    if (k == KEY_ESC) {
+    }
+}
+
+static void handle_key(int k) {
+    if (k == KEY_DESKTOP_EXIT) {
         running = 0;
         return;
     }
-    if (k == '\t') {
+    if (k == KEY_LAUNCHER_TOGGLE) {
+        toggle_launcher();
+        return;
+    }
+    if (k == KEY_WINDOW_CYCLE) {
+        close_control_center();
+        suppress_tab_release = 1;
         activate_next_visible();
         desktop_dirty = 1;
         return;
+    }
+    if (k == KEY_WINDOW_CYCLE_REVERSE) {
+        close_control_center();
+        suppress_tab_release = 1;
+        activate_previous_visible();
+        desktop_dirty = 1;
+        return;
+    }
+    if (k == KEY_WINDOW_CLOSE) {
+        if (control_center_open) {
+            close_control_center();
+            return;
+        }
+        if (focus >= 0 && focus < WIN_COUNT &&
+            windows[focus].visible && !windows[focus].minimized)
+            close_window(focus);
+        desktop_dirty = 1;
+        return;
+    }
+    if (k == KEY_WINDOW_SNAP_LEFT || k == KEY_WINDOW_SNAP_RIGHT) {
+        close_control_center();
+        if (focus >= 0 && focus < WIN_COUNT &&
+            windows[focus].visible && !windows[focus].minimized)
+            snap_window(focus, k == KEY_WINDOW_SNAP_LEFT
+                                   ? WINDOW_SNAP_LEFT
+                                   : WINDOW_SNAP_RIGHT);
+        return;
+    }
+    if (k == KEY_WINDOW_MAXIMIZE) {
+        close_control_center();
+        if (focus >= 0 && focus < WIN_COUNT &&
+            windows[focus].visible && !windows[focus].minimized)
+            maximize_window(focus);
+        return;
+    }
+    if (k == KEY_WINDOW_RESTORE) {
+        close_control_center();
+        if (focus >= 0 && focus < WIN_COUNT &&
+            windows[focus].visible && !windows[focus].minimized) {
+            if (windows[focus].maximized ||
+                windows[focus].snap_mode != WINDOW_SNAP_NONE)
+                restore_window(focus);
+            else
+                minimize_window(focus);
+            desktop_dirty = 1;
+        }
+        return;
+    }
+    if (control_center_open) {
+        if (k == 0x1F) {
+            toggle_ime_mode();
+            return;
+        }
+        if (k == KEY_ESC) {
+            close_control_center();
+            return;
+        }
+        if (k == KEY_UP || k == KEY_LEFT) {
+            control_center_selected =
+                (control_center_selected + CONTROL_CENTER_ITEM_COUNT - 1) %
+                CONTROL_CENTER_ITEM_COUNT;
+            queue_damage(control_center_rect());
+            return;
+        }
+        if (k == KEY_DOWN || k == KEY_RIGHT || k == '\t') {
+            control_center_selected =
+                (control_center_selected + 1) %
+                CONTROL_CENTER_ITEM_COUNT;
+            queue_damage(control_center_rect());
+            return;
+        }
+        if (k == '\n' || k == '\r' || k == ' ') {
+            activate_control_center_item(control_center_selected);
+            return;
+        }
+        return;
+    }
+    if (ime_handle_key(k))
+        return;
+    if (k == KEY_ESC) {
+        if (context_open) {
+            context_open = 0;
+            desktop_dirty = 1;
+            return;
+        }
+        if (focus == WIN_LAUNCHER && launcher_query_length > 0) {
+            launcher_query_length = 0;
+            launcher_query[0] = 0;
+            launcher_select_first_result();
+            win_damage(WIN_LAUNCHER);
+            return;
+        }
+        if (focus >= 0 && focus < WIN_APP_BASE) {
+            minimize_window(focus);
+            desktop_dirty = 1;
+            return;
+        }
     }
     if (focus == WIN_STATUS) {
         /* Digits pick the first nine listed modes; [ ] cycle all ratios. */
@@ -3229,20 +4050,54 @@ static void handle_key(int k) {
     }
     if (focus == WIN_LAUNCHER) {
         int old_selected = app_selected;
-        if (k == KEY_UP && app_selected > 0)
-            app_selected--;
-        else if (k == KEY_DOWN && app_selected + 1 < app_count)
-            app_selected++;
-        else if ((k == '\n' || k == '\r') && app_count > 0) {
-            run_app(apps[app_selected].path);
+        int result_count = launcher_result_count();
+        int selected_result = launcher_result_for_app(app_selected);
+        if (k == KEY_UP && result_count > 0) {
+            if (selected_result < 0)
+                selected_result = 0;
+            else if (selected_result > 0)
+                selected_result--;
+            app_selected = launcher_app_at_result(selected_result);
+        } else if (k == KEY_DOWN && result_count > 0) {
+            if (selected_result < 0)
+                selected_result = 0;
+            else if (selected_result + 1 < result_count)
+                selected_result++;
+            app_selected = launcher_app_at_result(selected_result);
+        } else if ((k == '\n' || k == '\r') && result_count > 0 &&
+                   launcher_app_matches(app_selected)) {
+            launcher_run_app(app_selected);
             return;
-        } else if (k == 'r' || k == 'R') {
-            scan_apps();
-            desktop_dirty = 1;
+        } else if ((k == KEY_BACKSPACE || k == 127) &&
+                   launcher_query_length > 0) {
+            launcher_query[--launcher_query_length] = 0;
+            launcher_select_first_result();
+            win_damage(WIN_LAUNCHER);
+            return;
+        } else if (((k >= 'a' && k <= 'z') ||
+                    (k >= 'A' && k <= 'Z') ||
+                    (k >= '0' && k <= '9') ||
+                    (k == ' ' && launcher_query_length > 0)) &&
+                   launcher_query_length + 1 < LAUNCHER_QUERY_CAP) {
+            launcher_query[launcher_query_length++] = (char)k;
+            launcher_query[launcher_query_length] = 0;
+            launcher_select_first_result();
+            win_damage(WIN_LAUNCHER);
             return;
         }
-        if (app_selected != old_selected)
+        if (app_selected != old_selected) {
+            struct rect c = content_rect(WIN_LAUNCHER);
+            selected_result = launcher_result_for_app(app_selected);
+            int row_top = LAUNCHER_HEADER_H +
+                          max_i(0, selected_result) * LAUNCHER_ROW_STEP;
+            int row_bottom = row_top + LAUNCHER_ROW_H;
+            if (row_top < scroll_y[WIN_LAUNCHER])
+                scroll_y[WIN_LAUNCHER] = row_top;
+            else if (row_bottom > scroll_y[WIN_LAUNCHER] + c.h)
+                scroll_y[WIN_LAUNCHER] = row_bottom - c.h;
+            clamp_scroll(WIN_LAUNCHER);
             win_damage(WIN_LAUNCHER);
+        }
         return;
     }
     int slot = app_slot_for_win(focus);
@@ -3259,6 +4114,10 @@ static void forward_key_releases(void) {
     while (read(keyevent_fd, &event, sizeof(event)) == (int)sizeof(event)) {
         if (event & 0x8000u)
             continue;
+        if ((event & 0x7FFFu) == '\t' && suppress_tab_release) {
+            suppress_tab_release = 0;
+            continue;
+        }
         int slot = app_slot_for_win(focus);
         if (slot >= 0 && app_sessions[slot].used &&
             app_send_event(slot, GUIAPP_EVT_KEY, 0, 0,
@@ -3314,15 +4173,14 @@ static int hit_status_mode_at(int x, int y) {
     return -1;
 }
 
-/* Geometry shared by paint, hit-test, and damage.  Width is capped to the
- * visible content so dirty rects match what fill_round actually painted. */
+/* Geometry shared by paint, hit-test, and damage.  Rows retain their virtual
+ * width so horizontal scrolling can reveal long names; paint and damage are
+ * clipped back to the visible content rect. */
 static struct rect launcher_row_paint_rect(int index) {
     struct rect c = content_rect(WIN_LAUNCHER);
     int ox = c.x - scroll_x[WIN_LAUNCHER];
     int oy = c.y - scroll_y[WIN_LAUNCHER];
     int row_w = content_width(WIN_LAUNCHER) - 20;
-    if (row_w > c.w)
-        row_w = c.w;
     if (row_w < 1)
         row_w = 1;
     struct rect row = {
@@ -3335,8 +4193,15 @@ static struct rect launcher_row_paint_rect(int index) {
 }
 
 static struct rect launcher_row_screen_rect(int index) {
-    return intersect_rect(launcher_row_paint_rect(index),
-                          content_rect(WIN_LAUNCHER));
+    struct rect c = content_rect(WIN_LAUNCHER);
+    struct rect list_clip = {
+        c.x, c.y + LAUNCHER_HEADER_H,
+        c.w, max_i(0, c.h - LAUNCHER_HEADER_H)
+    };
+    int result = launcher_result_for_app(index);
+    if (result < 0)
+        return (struct rect){0, 0, 0, 0};
+    return intersect_rect(launcher_row_paint_rect(result), list_clip);
 }
 
 static int hit_launcher_row_at(int x, int y) {
@@ -3350,18 +4215,31 @@ static int hit_launcher_row_at(int x, int y) {
     int rel = y - (c.y + LAUNCHER_HEADER_H) + scroll_y[WIN_LAUNCHER];
     if (rel < 0)
         return -1;
-    int idx = rel / LAUNCHER_ROW_STEP;
-    if (idx < 0 || idx >= app_count)
+    int result = rel / LAUNCHER_ROW_STEP;
+    if (result < 0 || result >= launcher_result_count())
         return -1;
     /* Ignore the inter-row gap (STEP - ROW_H); it is not painted as hover. */
-    int row_top = idx * LAUNCHER_ROW_STEP;
+    int row_top = result * LAUNCHER_ROW_STEP;
     if (rel < row_top || rel >= row_top + LAUNCHER_ROW_H)
         return -1;
-    return idx;
+    return launcher_app_at_result(result);
 }
 
 /* Recompute pointer-driven hover and damage full widget bounds on change. */
 static void refresh_pointer_hover_damage(void) {
+    int topbar_control = hit_topbar_control_at(pointer_x, pointer_y);
+    if (topbar_control != hover_topbar_control) {
+        hover_topbar_control = topbar_control;
+        topbar_damage();
+    }
+    if (control_center_open) {
+        int item = hit_control_center_item_at(pointer_x, pointer_y);
+        if (item >= 0 && item != control_center_selected) {
+            control_center_selected = item;
+            queue_damage(control_center_rect());
+        }
+    }
+
     int mode = hit_status_mode_at(pointer_x, pointer_y);
     if (mode != hover_status_mode) {
         if (hover_status_mode >= 0)
@@ -3392,6 +4270,16 @@ static void refresh_pointer_hover_damage(void) {
     }
 }
 
+static int snap_mode_at_pointer(void) {
+    if (pointer_y <= 8)
+        return WINDOW_SNAP_MAXIMIZE;
+    if (pointer_x <= 8)
+        return WINDOW_SNAP_LEFT;
+    if (pointer_x >= sw - 9)
+        return WINDOW_SNAP_RIGHT;
+    return WINDOW_SNAP_NONE;
+}
+
 static void handle_mouse(void) {
     struct mouse_state ms;
     if (mouse_get(&ms) < 0)
@@ -3418,8 +4306,46 @@ static void handle_mouse(void) {
     int left = ms.buttons & 1;
     int right = ms.buttons & 2;
     dock_hover = hit_dock(pointer_x, pointer_y);
-    if (dock_hover != old_dock_hover)
+    if (dock_hover != old_dock_hover) {
+        int keep_tooltip = old_dock_hover >= 0 && dock_hover >= 0 &&
+                           dock_tooltip_visible;
+        dock_hover_since = tick;
+        dock_tooltip_visible = keep_tooltip;
         dock_damage();
+    } else if (dock_hover >= 0 && !dock_tooltip_visible &&
+               tick - dock_hover_since >= DOCK_TOOLTIP_DELAY) {
+        dock_tooltip_visible = 1;
+        dock_damage();
+    }
+
+    if (left && !(prev_buttons & 1)) {
+        int topbar_control =
+            hit_topbar_control_at(pointer_x, pointer_y);
+        if (topbar_control >= 0) {
+            if (topbar_control == 0)
+                toggle_launcher();
+            else
+                toggle_control_center();
+            prev_buttons = ms.buttons;
+            return;
+        }
+        if (control_center_open) {
+            int item =
+                hit_control_center_item_at(pointer_x, pointer_y);
+            if (item >= 0)
+                activate_control_center_item(item);
+            else
+                close_control_center();
+            prev_buttons = ms.buttons;
+            return;
+        }
+    }
+
+    if (right && !(prev_buttons & 2) && control_center_open) {
+        close_control_center();
+        prev_buttons = ms.buttons;
+        return;
+    }
 
     if (right && !(prev_buttons & 2)) {
         int target = hit_window(pointer_x, pointer_y);
@@ -3438,10 +4364,12 @@ static void handle_mouse(void) {
     }
 
     if (left && !(prev_buttons & 1) && context_open) {
-        int item = (pointer_y - context_y - 4) / CONTEXT_ITEM_STEP;
-        if (pointer_x >= context_x + 4 &&
-            pointer_x < context_x + CONTEXT_MENU_W - 4 &&
-            pointer_y >= context_y + 4 && item >= 0 && item < 3) {
+        int relative_y = pointer_y - context_y - 6;
+        int item = relative_y >= 0 ? relative_y / CONTEXT_ITEM_STEP : -1;
+        int in_row = item >= 0 && item < 3 &&
+                     relative_y - item * CONTEXT_ITEM_STEP < CONTEXT_ITEM_H;
+        if (pointer_x >= context_x + 6 &&
+            pointer_x < context_x + CONTEXT_MENU_W - 6 && in_row) {
             static const int commands[] = {GUIAPP_CMD_COPY, GUIAPP_CMD_PASTE, GUIAPP_CMD_CUT};
             if (item != 1 || clipboard[0])
                 clipboard_command(commands[item]);
@@ -3477,7 +4405,11 @@ static void handle_mouse(void) {
             dock_expanded = !dock_expanded;
             desktop_dirty = 1;
         } else if (dock_hover >= 0) {
-            activate(dock_hover);
+            if (windows[dock_hover].active &&
+                !windows[dock_hover].minimized)
+                minimize_window(dock_hover);
+            else
+                activate(dock_hover);
             dock_expanded = 0;
         } else {
             int control = -1;
@@ -3529,6 +4461,10 @@ static void handle_mouse(void) {
             int rz = hit_resize(pointer_x, pointer_y, &edges);
             if (rz >= 0) {
                 activate(rz);
+                if (windows[rz].snap_mode != WINDOW_SNAP_NONE) {
+                    windows[rz].snap_mode = WINDOW_SNAP_NONE;
+                    windows[rz].restore = windows[rz].r;
+                }
                 resize_win = rz;
                 resize_edges = edges;
                 resize_start_x = pointer_x;
@@ -3559,29 +4495,42 @@ static void handle_mouse(void) {
             }
             int t = hit_window_title(pointer_x, pointer_y);
             if (t >= 0) {
+                if (t == title_last_click &&
+                    tick - title_last_click_tick <= 25u &&
+                    abs_i(pointer_x - title_last_click_x) <= 4 &&
+                    abs_i(pointer_y - title_last_click_y) <= 4) {
+                    title_last_click = -1;
+                    drag_win = -1;
+                    toggle_maximize(t);
+                    prev_buttons = ms.buttons;
+                    return;
+                }
+                title_last_click = t;
+                title_last_click_tick = tick;
+                title_last_click_x = pointer_x;
+                title_last_click_y = pointer_y;
                 drag_win = t;
                 drag_dx = pointer_x - windows[t].r.x;
                 drag_dy = pointer_y - windows[t].r.y;
+                drag_start_x = pointer_x;
+                drag_start_y = pointer_y;
+                drag_moved = 0;
+                snap_preview_mode = WINDOW_SNAP_NONE;
             }
             if (focus == WIN_LAUNCHER) {
-                struct rect c = content_rect(WIN_LAUNCHER);
-                int rel = pointer_y - (c.y + LAUNCHER_HEADER_H) +
-                          scroll_y[WIN_LAUNCHER];
-                if (rel >= 0) {
-                    int idx = rel / LAUNCHER_ROW_STEP;
-                    if (idx >= 0 && idx < app_count) {
-                        if (idx == app_last_click &&
-                            tick - app_last_click_tick <= 25u) {
-                            app_selected = idx;
-                            app_last_click = -1;
-                            run_app(apps[idx].path);
-                            prev_buttons = ms.buttons;
-                            return;
-                        }
+                int idx = hit_launcher_row_at(pointer_x, pointer_y);
+                if (idx >= 0) {
+                    if (idx == app_last_click &&
+                        tick - app_last_click_tick <= 25u) {
                         app_selected = idx;
-                        app_last_click = idx;
-                        app_last_click_tick = tick;
+                        app_last_click = -1;
+                        launcher_run_app(idx);
+                        prev_buttons = ms.buttons;
+                        return;
                     }
+                    app_selected = idx;
+                    app_last_click = idx;
+                    app_last_click_tick = tick;
                 }
             } else {
                 int slot = app_slot_for_win(focus);
@@ -3595,11 +4544,25 @@ static void handle_mouse(void) {
     if (!left) {
         if (app_mouse_capture >= 0)
             send_mouse_to_app(app_mouse_capture, ms.buttons, 0);
+        int finished_drag = drag_win;
+        int finished_snap = drag_moved ? snap_preview_mode
+                                       : WINDOW_SNAP_NONE;
         int finished_resize = resize_win;
         app_mouse_capture = -1;
         drag_win = -1;
+        drag_moved = 0;
+        snap_preview_mode = WINDOW_SNAP_NONE;
         scroll_drag_win = -1;
         resize_win = -1;
+        if (finished_drag >= 0 &&
+            finished_snap == WINDOW_SNAP_MAXIMIZE)
+            maximize_window(finished_drag);
+        else if (finished_drag >= 0 &&
+                 (finished_snap == WINDOW_SNAP_LEFT ||
+                  finished_snap == WINDOW_SNAP_RIGHT))
+            snap_window(finished_drag, finished_snap);
+        else if (finished_drag >= WIN_APP_BASE)
+            (void)sync_app_size(finished_drag, 1);
         if (finished_resize >= WIN_APP_BASE)
             (void)sync_app_size(finished_resize, 1);
         update_hover_app(1);
@@ -3637,9 +4600,36 @@ static void handle_mouse(void) {
     if (left && drag_win >= 0) {
         struct rect *r = &windows[drag_win].r;
         struct rect old = *r;
-        if (windows[drag_win].maximized) {
+        if (!drag_moved) {
+            int distance = abs_i(pointer_x - drag_start_x) +
+                           abs_i(pointer_y - drag_start_y);
+            if (distance < 4) {
+                prev_buttons = ms.buttons;
+                return;
+            }
+            drag_moved = 1;
+            title_last_click = -1;
+        }
+        int next_preview = snap_mode_at_pointer();
+        if (next_preview != snap_preview_mode) {
+            snap_preview_mode = next_preview;
+            desktop_dirty = 1;
+        }
+        if (windows[drag_win].maximized ||
+            windows[drag_win].snap_mode != WINDOW_SNAP_NONE) {
+            struct rect restore = windows[drag_win].restore;
+            drag_dx = clamp_i(drag_dx * restore.w / max_i(1, r->w),
+                              0, max_i(0, restore.w - 1));
+            drag_dy = clamp_i(drag_dy, 0, WINDOW_TITLE_H - 1);
+            *r = restore;
             windows[drag_win].maximized = 0;
-            windows[drag_win].restore = *r;
+            windows[drag_win].snap_mode = WINDOW_SNAP_NONE;
+            int slot = app_slot_for_win(drag_win);
+            if (slot >= 0 && app_sessions[slot].used) {
+                app_sessions[slot].resize_dirty = 1;
+                publish_app_configure(slot);
+            }
+            desktop_dirty = 1;
         }
         r->x = pointer_x - drag_dx;
         r->y = pointer_y - drag_dy;

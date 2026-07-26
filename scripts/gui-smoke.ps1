@@ -8,6 +8,12 @@ param(
     [string]$PythonPath = "",
     [ValidateSet("none", "dsound", "sdl", "wav")]
     [string]$AudioDriver = "none",
+    [ValidateSet("std", "virtio")]
+    [string]$Graphics = "std",
+    [int]$DisplayWidth = 1600,
+    [int]$DisplayHeight = 900,
+    [ValidateRange(0, 9)]
+    [int]$DisplayModeKey = 0,
     [int]$TimeoutSeconds = 45
 )
 
@@ -130,12 +136,62 @@ function Type-Command([string]$Text) {
     Type-Text $Text
     Send-Key "ret"
     Start-Sleep -Milliseconds 1000
+    if ($Text -eq "gui" -and $DisplayModeKey -gt 0) {
+        Set-GuiDisplayMode
+    }
 }
 
 function Press-Many([string]$Key, [int]$Count) {
     for ($i = 0; $i -lt $Count; $i++) {
         Send-Key $Key
     }
+}
+
+function Get-PpmDimensions([string]$PpmPath) {
+    $reader = [IO.File]::OpenText((Resolve-Path -LiteralPath $PpmPath))
+    try {
+        if ($reader.ReadLine() -ne "P6") {
+            throw "Unexpected PPM format: $PpmPath"
+        }
+        $sizeLine = $reader.ReadLine()
+        while ($sizeLine -and $sizeLine.StartsWith("#")) {
+            $sizeLine = $reader.ReadLine()
+        }
+        $parts = $sizeLine -split "\s+"
+        if ($parts.Count -lt 2) {
+            throw "Missing PPM dimensions: $PpmPath"
+        }
+        return @{
+            Width = [int]$parts[0]
+            Height = [int]$parts[1]
+        }
+    } finally {
+        $reader.Dispose()
+    }
+}
+
+function Set-GuiDisplayMode {
+    $probePpm = (Join-Path $OutDir "resolution-probe.ppm")
+    $probe = Capture-Screen "resolution-probe" $probePpm (Join-Path $OutDir "resolution-probe.png")
+    $probeSize = Get-PpmDimensions $probe.Ppm
+    if ($probeSize.Width -eq $DisplayWidth -and
+        $probeSize.Height -eq $DisplayHeight) {
+        return
+    }
+    # With no external apps, System is 26 px right of taskbar center.
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative ([int]($probeSize.Width / 2) + 26) ($probeSize.Height - 44)
+    Click-Left
+    Send-Key ([string]$DisplayModeKey)
+    Start-Sleep -Milliseconds 1200
+    # System remains active after the mode switch. Clicking its task tile
+    # minimizes it and returns focus to the launcher at the new size.
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative ([int]($DisplayWidth / 2) + 26) ($DisplayHeight - 44)
+    Click-Left
+    Start-Sleep -Milliseconds 500
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative ([int]($DisplayWidth / 2)) ([int]($DisplayHeight / 2))
 }
 
 function Move-MouseRelative([int]$Dx, [int]$Dy) {
@@ -255,12 +311,19 @@ $qemuArgs = @(
     "-display", "none",
     "-monitor", "tcp:127.0.0.1:$monitorPort,server,nowait",
     "-no-reboot",
-    "-vga", "std",
     "-audiodev", "$AudioDriver,id=audio0",
     "-device", "AC97,audiodev=audio0",
     "-netdev", "user,id=n0",
     "-device", "ne2k_isa,netdev=n0,iobase=0x300,irq=10"
 )
+if ($Graphics -eq "virtio") {
+    $qemuArgs += @(
+        "-vga", "none",
+        "-device", "virtio-vga,xres=$DisplayWidth,yres=$DisplayHeight"
+    )
+} else {
+    $qemuArgs += @("-vga", "std")
+}
 
 $script:qemuProcess = Start-Process -FilePath $QemuPath -ArgumentList $qemuArgs -WorkingDirectory (Get-Location) -PassThru -WindowStyle Hidden
 $monitor = $null
@@ -279,25 +342,146 @@ try {
     Start-Sleep -Milliseconds 900
     $appsPpm = (Join-Path $OutDir "app-center.ppm")
     $screens += Capture-Screen "app-center" $appsPpm (Join-Path $OutDir "app-center.png")
+    $desktopSize = Get-PpmDimensions $appsPpm
 
+    # The top-right status cluster anchors a keyboard-accessible control
+    # center with time, input state, Settings, and System Monitor shortcuts.
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative ($desktopSize.Width - 96) 18
+    Click-Left
+    Start-Sleep -Milliseconds 450
+    $controlCenterPpm = (Join-Path $OutDir "control-center.ppm")
+    $screens += Capture-Screen "control-center" $controlCenterPpm (Join-Path $OutDir "control-center.png")
+    Send-Key "down"
+    Send-Key "down"
+    Send-Key "ret"
+    Start-Sleep -Milliseconds 1400
+    $monitorQuickPpm = (Join-Path $OutDir "control-center-monitor.ppm")
+    $screens += Capture-Screen "control-center-monitor" $monitorQuickPpm (Join-Path $OutDir "control-center-monitor.png")
+    Send-Key "alt-f4"
+    Start-Sleep -Milliseconds 500
+
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative ($desktopSize.Width - 96) 18
+    Click-Left
+    Send-Key "down"
+    Send-Key "ret"
+    Start-Sleep -Milliseconds 700
+    $settingsQuickPpm = (Join-Path $OutDir "control-center-settings.ppm")
+    $screens += Capture-Screen "control-center-settings" $settingsQuickPpm (Join-Path $OutDir "control-center-settings.png")
+    Send-Key "esc"
+    Start-Sleep -Milliseconds 350
+
+    # A tap of Super toggles Applications without leaking a character into
+    # the focused app; Super+Arrow remains reserved for window arrangement.
+    Send-Key "meta_l"
+    Start-Sleep -Milliseconds 450
+    $superHiddenPpm = (Join-Path $OutDir "launcher-super-hidden.ppm")
+    $screens += Capture-Screen "launcher-super-hidden" $superHiddenPpm (Join-Path $OutDir "launcher-super-hidden.png")
+    Send-Key "meta_l"
+    Start-Sleep -Milliseconds 450
+
+    Type-Text "text"
+    Start-Sleep -Milliseconds 350
+    $searchPpm = (Join-Path $OutDir "launcher-search.ppm")
+    $screens += Capture-Screen "launcher-search" $searchPpm (Join-Path $OutDir "launcher-search.png")
+    Type-Text "zzz"
+    Start-Sleep -Milliseconds 250
+    $noResultsPpm = (Join-Path $OutDir "launcher-no-results.ppm")
+    $screens += Capture-Screen "launcher-no-results" $noResultsPpm (Join-Path $OutDir "launcher-no-results.png")
+    Press-Many "backspace" 3
     Send-Key "ret"
     Start-Sleep -Milliseconds 900
     $texteditPpm = (Join-Path $OutDir "textedit.ppm")
     $screens += Capture-Screen "textedit" $texteditPpm (Join-Path $OutDir "textedit.png")
-    # The pointer starts at 640,400. TextEdit opens at 80,74 with its
-    # maximize control centered near 629,88.
-    Move-MouseRelative -11 -312
+    $desktopSize = Get-PpmDimensions $texteditPpm
+    $taskX = [int]($desktopSize.Width / 2) + 53
+    $dockY = $desktopSize.Height - 44
+    # With one external app, the compact task tile is 53 px right of center.
+    # Its first click minimizes TextEdit and its second restores the same task.
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative $taskX $dockY
     Click-Left
-    Start-Sleep -Milliseconds 900
+    Start-Sleep -Milliseconds 500
+    $minimizedPpm = (Join-Path $OutDir "taskbar-minimized.ppm")
+    $screens += Capture-Screen "taskbar-minimized" $minimizedPpm (Join-Path $OutDir "taskbar-minimized.png")
+    Click-Left
+    Start-Sleep -Milliseconds 500
+    $restoredPpm = (Join-Path $OutDir "taskbar-restored.ppm")
+    $screens += Capture-Screen "taskbar-restored" $restoredPpm (Join-Path $OutDir "taskbar-restored.png")
+    # The pinned System tile is one 54 px step to the left. Its tooltip should
+    # appear after the desktop's short initial hover delay.
+    Move-MouseRelative -54 0
+    Start-Sleep -Milliseconds 600
+    $tooltipPpm = (Join-Path $OutDir "taskbar-tooltip.ppm")
+    $screens += Capture-Screen "taskbar-tooltip" $tooltipPpm (Join-Path $OutDir "taskbar-tooltip.png")
+    Send-Key "alt-tab"
+    Start-Sleep -Milliseconds 350
+    $switcherPpm = (Join-Path $OutDir "alt-tab-launcher.ppm")
+    $screens += Capture-Screen "alt-tab-launcher" $switcherPpm (Join-Path $OutDir "alt-tab-launcher.png")
+    Send-Key "alt-tab"
+    Start-Sleep -Milliseconds 250
+    # Double-clicking the TextEdit title bar maximizes it.
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative 280 91
+    Click-Left
+    Click-Left
+    Start-Sleep -Milliseconds 1250
     $texteditMaxPpm = (Join-Path $OutDir "textedit-maximized.ppm")
     $screens += Capture-Screen "textedit-maximized" $texteditMaxPpm (Join-Path $OutDir "textedit-maximized.png")
-    Send-Key "esc"
+    # Dragging a maximized title bar restores the saved window size under the
+    # pointer instead of overwriting the restore geometry.
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative 300 55
+    Send-Hmp "mouse_button 1"
+    Move-MouseRelative 140 110
+    Send-Hmp "mouse_button 0"
+    Start-Sleep -Milliseconds 1250
+    $dragRestorePpm = (Join-Path $OutDir "textedit-drag-restored.ppm")
+    $screens += Capture-Screen "textedit-drag-restored" $dragRestorePpm (Join-Path $OutDir "textedit-drag-restored.png")
+    # Dragging a regular title bar into the left screen edge snaps it to the
+    # left half of the desktop work area.
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative 440 168
+    Send-Hmp "mouse_button 1"
+    Move-MouseRelative -2000 0
+    Start-Sleep -Milliseconds 350
+    $snapPreviewPpm = (Join-Path $OutDir "textedit-snap-preview.ppm")
+    $screens += Capture-Screen "textedit-snap-preview" $snapPreviewPpm (Join-Path $OutDir "textedit-snap-preview.png")
+    Send-Hmp "mouse_button 0"
+    Start-Sleep -Milliseconds 900
+    $snapLeftPpm = (Join-Path $OutDir "textedit-snapped-left.ppm")
+    $screens += Capture-Screen "textedit-snapped-left" $snapLeftPpm (Join-Path $OutDir "textedit-snapped-left.png")
+    # Super+Right moves the focused window to the opposite half without an
+    # animation; Super+Down restores its pre-snap geometry.
+    Send-Key "meta_l-right"
+    Start-Sleep -Milliseconds 700
+    $snapRightPpm = (Join-Path $OutDir "textedit-snapped-right.ppm")
+    $screens += Capture-Screen "textedit-snapped-right" $snapRightPpm (Join-Path $OutDir "textedit-snapped-right.png")
+    Send-Key "meta_l-down"
+    Start-Sleep -Milliseconds 550
+    # Dragging to the top edge uses the same direct manipulation path to
+    # maximize, distinct from the title-bar double-click path above.
+    Move-MouseRelative -2000 -2000
+    Move-MouseRelative 440 168
+    Send-Hmp "mouse_button 1"
+    Move-MouseRelative 0 -2000
+    Send-Hmp "mouse_button 0"
+    Start-Sleep -Milliseconds 900
+    $dragMaxPpm = (Join-Path $OutDir "textedit-drag-maximized.ppm")
+    $screens += Capture-Screen "textedit-drag-maximized" $dragMaxPpm (Join-Path $OutDir "textedit-drag-maximized.png")
+    # Alt+F4 closes only the focused window; it must not terminate the desktop.
+    Send-Key "alt-f4"
+    Start-Sleep -Milliseconds 700
+    $altF4Ppm = (Join-Path $OutDir "alt-f4-closed.ppm")
+    $screens += Capture-Screen "alt-f4-closed" $altF4Ppm (Join-Path $OutDir "alt-f4-closed.png")
+    Send-Key "ctrl-alt-esc"
     Wait-ForLog "\[gui\] exited" 10
 
     # Opening a regular /bin ELF through Files must hand it to Terminal
     # without terminating the File Manager GUI protocol session.
     Type-Command "gui"
-    Press-Many "down" 3
+    Press-Many "down" 4
     Send-Key "ret"
     Start-Sleep -Milliseconds 600
     Send-Key "left"
@@ -311,44 +495,38 @@ try {
     if ((Read-SerialLog) -match "\[gui\] app protocol ended") {
         Fail-WithLog "File Manager protocol ended while opening a terminal ELF."
     }
-    Send-Key "esc"
+    Send-Key "ctrl-alt-esc"
     Wait-ForLog "\[gui\] exited" 10
 
     Type-Command "gui"
-    Send-Key "down"
+    Press-Many "down" 2
     Send-Key "ret"
     Start-Sleep -Milliseconds 900
     $paintPpm = (Join-Path $OutDir "paint.ppm")
     $screens += Capture-Screen "paint" $paintPpm (Join-Path $OutDir "paint.png")
-    Send-Key "esc"
+    Send-Key "ctrl-alt-esc"
     Wait-ForLog "\[gui\] exited" 10
 
     Type-Command "gui"
-    Send-Key "down"
-    Send-Key "down"
+    Press-Many "down" 3
     Send-Key "ret"
     Start-Sleep -Milliseconds 900
     $calculatorPpm = (Join-Path $OutDir "calculator.ppm")
     $screens += Capture-Screen "calculator" $calculatorPpm (Join-Path $OutDir "calculator.png")
-    Send-Key "esc"
+    Send-Key "ctrl-alt-esc"
     Wait-ForLog "\[gui\] exited" 10
 
     Type-Command "gui"
-    Send-Key "down"
-    Send-Key "down"
-    Send-Key "down"
-    Send-Key "down"
+    Press-Many "down" 5
     Send-Key "ret"
     Start-Sleep -Milliseconds 900
     $browserPpm = (Join-Path $OutDir "browser.ppm")
     $screens += Capture-Screen "browser" $browserPpm (Join-Path $OutDir "browser.png")
-    Send-Key "esc"
+    Send-Key "ctrl-alt-esc"
     Wait-ForLog "\[gui\] exited" 10
 
     Type-Command "gui"
-    Send-Key "down"
-    Send-Key "down"
-    Send-Key "down"
+    Press-Many "down" 4
     Send-Key "ret"
     Start-Sleep -Milliseconds 900
     $filesPpm = (Join-Path $OutDir "filemanager.ppm")
@@ -375,25 +553,17 @@ try {
     Start-Sleep -Milliseconds 900
     $manyPpm = (Join-Path $OutDir "many-windows.ppm")
     $screens += Capture-Screen "many-windows" $manyPpm (Join-Path $OutDir "many-windows.png")
-    # Normalize the pointer to the top-left, then click the More task button
-    # near the bottom-right of the 1280x800 smoke desktop.
-    Move-MouseRelative -2000 -2000
-    Move-MouseRelative 1086 752
-    Click-Left
-    Start-Sleep -Milliseconds 500
-    $expandedPpm = (Join-Path $OutDir "dock-expanded.ppm")
-    $screens += Capture-Screen "dock-expanded" $expandedPpm (Join-Path $OutDir "dock-expanded.png")
-    Send-Key "esc"
+    Send-Key "ctrl-alt-esc"
     Wait-ForLog "\[gui\] exited" 10
 
     Type-Command "gui"
-    Send-Key "down"
-    Send-Key "down"
-    Send-Key "down"
-    Send-Key "down"
-    Send-Key "down"
+    Press-Many "down" 6
     Send-Key "ret"
-    Wait-ForLog "PCM playback started \(AC97 bus master\)" 15
+    if ($AudioDriver -eq "none") {
+        Start-Sleep -Seconds 6
+    } else {
+        Wait-ForLog "PCM playback started \(AC97 bus master\)" 15
+    }
     Start-Sleep -Seconds 2
     $doomPpm = (Join-Path $OutDir "doom.ppm")
     $screens += Capture-Screen "doom" $doomPpm (Join-Path $OutDir "doom.png")
@@ -401,17 +571,19 @@ try {
     Start-Sleep -Seconds 2
     $doomInputPpm = (Join-Path $OutDir "doom-input.ppm")
     $screens += Capture-Screen "doom-input" $doomInputPpm (Join-Path $OutDir "doom-input.png")
-    Send-Key "esc"
+    Send-Key "ctrl-alt-esc"
     Wait-ForLog "\[gui\] exited" 10
 
     Type-Command "gui"
-    Send-Key "tab"
+    Type-Text "terminal"
+    Send-Key "ret"
+    Start-Sleep -Milliseconds 900
     Type-Text "about"
     Send-Key "ret"
     Start-Sleep -Milliseconds 900
     $terminalPpm = (Join-Path $OutDir "terminal-about.ppm")
     $screens += Capture-Screen "terminal-about" $terminalPpm (Join-Path $OutDir "terminal-about.png")
-    Send-Key "esc"
+    Send-Key "ctrl-alt-esc"
     Wait-ForLog "\[gui\] exited" 10
 
     $log = Read-SerialLog

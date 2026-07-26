@@ -45,7 +45,7 @@ point; Browser wraps decoded page text by pixel width. Open `/fs/utf8.txt` in
 Files for a built-in multilingual display sample.
 
 The desktop includes a system input method. Press `Ctrl+Space` to switch the
-top-right indicator between `英` and `中`. In Chinese mode, type full pinyin,
+top-right indicator between `EN` and `ZH`. In Chinese mode, type full pinyin,
 then press Space/Enter for the first candidate or `1`-`9` to choose another.
 Backspace edits the composition and Escape cancels it. The desktop owns the
 composition and candidate panel, then sends one `GUIAPP_EVT_TEXT` UTF-8 commit
@@ -57,6 +57,36 @@ the desktop Terminal all use this common protocol rather than private IMEs.
 The desktop supports click-to-focus and raise, title-bar dragging, edge and
 corner resizing, minimize, maximize, close, mouse wheel scrolling, draggable
 scrollbars, and app resize events.
+
+Double-click a title bar to maximize or restore its window. Dragging a
+maximized title bar down restores the saved window size under the pointer so it
+can be repositioned in one gesture. Dragging a title bar to the left or right
+screen edge tiles the window into that half of the work area; dragging to the
+top edge maximizes it. A restrained outline previews the destination while the
+pointer remains in direct control of the window.
+
+Alt+Tab and Shift+Alt+Tab cycle visible windows in both directions. Alt+F4
+closes only the focused window. Super+Left/Right tiles it, Super+Up maximizes
+it, and Super+Down restores an arranged window or minimizes a freeform one. A
+tap of Super toggles Applications; unsupported Super chords are reserved by
+the desktop instead of leaking a character into the focused app.
+Plain Tab is delivered to the focused application for fields, indentation, and
+other app-local navigation. Escape cancels IME composition, clears launcher
+search, dismisses desktop UI, or reaches the focused app; Ctrl+Alt+Esc is the
+explicit console-development shortcut that ends the desktop session.
+
+## System Shell
+
+The top bar is a persistent wayfinding and status surface. `BuzzOS` is a
+clickable Applications control, the center label names the focused window, and
+the right status cluster shows the current input mode and UTC time.
+
+Click the status cluster to open an anchored control center. It shows the full
+UTC date, active display mode/backend, and running GUI-app count. Its actions
+toggle English/Chinese input, open the built-in display Settings window, and
+launch System Monitor. Arrow keys or Tab move between actions, Enter activates
+one, and Escape or a click outside closes the panel. Keyboard-triggered shell
+actions are immediate and do not add decorative motion.
 
 Right-click an application content area to open the desktop-owned `Copy`,
 `Paste`, and `Cut` menu. The clipboard stores UTF-8 text and is shared across
@@ -193,10 +223,31 @@ the current edit line when no selection exists), Paste inserts the full
 clipboard, and Cut clears the shell edit line through Ctrl+U when no immutable
 output selection is active.
 
-The task Dock displays titles declared by each app frame. It shows several
-tasks inline, exposes all open app windows through More, and displays the full
-title while hovering a task. The desktop supports 10 concurrent external app
-windows; the expandable Dock is independent of that capacity.
+The compact taskbar keeps Applications and System pinned, then represents each
+running app with a stable monogram tile and running indicator. Hovering a tile
+briefly displays the full title declared by the app frame; after one tooltip is
+open, moving between adjacent tiles updates it immediately. Clicking the active
+tile minimizes its window, while clicking a minimized tile restores and raises
+it. If the taskbar is full, the `+` tile opens a complete titled task list.
+The desktop supports 10 concurrent external app windows; taskbar overflow is
+independent of that capacity.
+
+The desktop starts with Applications as its single visual focal point. System
+remains pinned and ready in the taskbar instead of opening a second competing
+window at startup.
+
+Applications can also be toggled from the `BuzzOS` top-bar control or with a
+tap of Super. The top-right clock/status control opens the system control
+center, keeping common system actions available without competing permanent
+windows.
+
+Applications has a persistent search field above its scrollable results. With
+the launcher focused, typing filters app names, summaries, and executable
+names; Up/Down moves within the filtered set and Enter launches the selection.
+Backspace edits the query, while Escape clears a non-empty query before it can
+exit the desktop. The header and search field stay visible while results
+scroll, and an explicit empty state explains how to clear a search with no
+matches.
 
 ## Run It
 
